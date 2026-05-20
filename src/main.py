@@ -30,5 +30,9 @@ def status():
             }
 
 if __name__ == "__main__":
+    # try to authenticate with the Google API to ensure credentials are set up correctly
+    agent.test_credentials()
+    
+    # Run the server with hot reload for development
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
