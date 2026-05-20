@@ -1,8 +1,13 @@
 import os
 import dotenv
 dotenv.load_dotenv()
+import typing
 
-# Google dependencies and API key setup
+import logging
+
+# Google Tasks API client setup
+
+# Gemini API key setup
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", None)
 if GOOGLE_API_KEY is None:
     raise ValueError("GOOGLE_API_KEY environment variable is not set")
@@ -11,8 +16,6 @@ from google import genai
 from google.genai import types
 
 client = genai.Client()
-
-import logging
 
 def generate_content(prompt:str) -> dict:
     print(f"Received prompt: {prompt}")
@@ -23,7 +26,8 @@ def generate_content(prompt:str) -> dict:
             contents=prompt,
             config=types.GenerateContentConfig(
                 max_output_tokens=500,
-                tools=[],
+                tools=[create_google_task],
+                # automatic_function_calling=types.AutomaticFunctionCallingConfig(disabled=False) # Not needed, as the SDK will automatically call the function when the response contains a function call
             )
         )
 
@@ -37,6 +41,8 @@ def generate_content(prompt:str) -> dict:
 
 
 # Tools for LLM agents
-def create_google_task(task_name: str, description: str, input_schema: dict) -> dict:
+def create_google_task(title: str, due_date: str | None):    
     """Handle the creation of a Google Task by LLM agent"""
-    return {}
+    print(f"Executing Google API call: Creating task '{title}' due on {due_date}")
+    # (Google API client code goes here)
+    return {"status": "success", "task_title": title}

@@ -13,8 +13,8 @@ class GenerateRequest(BaseModel):
 app = FastAPI()
 
 @app.get("/")
-def read_root():
-    return {"Hello": "World"}
+def root():
+    return "This is the Write to Tasks API. Use the /generate endpoint to generate content."
 
 @app.post("/generate")
 def generate(request: GenerateRequest):
@@ -22,6 +22,12 @@ def generate(request: GenerateRequest):
     if("error" in resp):
         raise HTTPException(status_code=500, detail=resp["error"])
     return resp
+
+@app.get("/status")
+def status():
+    return {
+                "status": "healthy"
+            }
 
 if __name__ == "__main__":
     import uvicorn
