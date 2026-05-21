@@ -18,6 +18,9 @@ def root():
 
 @app.post("/generate")
 def generate(request: GenerateRequest):
+    creds = agent.get_credentials()
+    if creds is None:
+        raise HTTPException(status_code=500, detail="Google API credentials not found. Please authenticate with the Google API before using this feature!")
     resp = agent.generate_content(request.prompt)
     if("error" in resp):
         raise HTTPException(status_code=500, detail=resp["error"])
@@ -25,9 +28,7 @@ def generate(request: GenerateRequest):
 
 @app.get("/status")
 def status():
-    return {
-                "status": "healthy"
-            }
+    return {"status": "healthy"}
 
 if __name__ == "__main__":
     # try to authenticate with the Google API to ensure credentials are set up correctly
