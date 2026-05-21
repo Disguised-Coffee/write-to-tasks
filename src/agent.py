@@ -128,3 +128,9 @@ def get_credentials() -> Credentials | None:
         creds = Credentials.from_authorized_user_file("token.json.env", SCOPES)
         return creds
     return None
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    logging.info("Run main.py to start the server. This script is not intended to run directly.")
+    test_credentials()

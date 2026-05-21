@@ -1,6 +1,7 @@
-import logging
 import agent
+import filetracker
 
+import logging
 logging.basicConfig(level=logging.INFO)
 
 # server dependencies
@@ -10,7 +11,7 @@ from pydantic import BaseModel
 class GenerateRequest(BaseModel):
     prompt: str
 
-app = FastAPI()
+app = FastAPI(lifespan=filetracker.lifespan)
 
 @app.get("/")
 def root():
