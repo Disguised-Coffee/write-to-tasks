@@ -1,5 +1,5 @@
 # Write-To-Tasks
-A Python application that integrates Google Gemini with the Google Tasks API to create tasks based on user input. The aim of this project is to allow users to easily convert their thoughts, ideas, or reminders into actionable tasks in their Google Tasks using natural language processing with Google Gemini as a parser.
+A Python application that integrates Google Gemini with the Google Tasks API to create tasks based on user input. The aim of this project is to allow users to easily convert typed and written todo lists into actionable tasks in their Google Tasks using natural language processing with Google Gemini as a parser.
 
 ---
 
