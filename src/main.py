@@ -2,6 +2,8 @@ import agent
 import filetracker
 
 import logging
+
+import tasks
 logging.basicConfig(level=logging.INFO)
 
 # server dependencies
@@ -22,7 +24,7 @@ def root():
 
 @app.post("/generate")
 def generate(request: GenerateRequest):
-    creds = agent.get_credentials()
+    creds = tasks.get_credentials()
     if creds is None:
         raise HTTPException(status_code=500, detail="Google API credentials not found. Please authenticate with the Google API before using this feature!")
     resp = agent.generate_content(request.prompt)
@@ -49,7 +51,8 @@ def status():
 
 if __name__ == "__main__":
     # try to authenticate with the Google API to ensure credentials are set up correctly
-    agent.test_credentials()
+    tasks.test_credentials()
+    tasks.init_db()
     
     # Run the server with hot reload for development
     import uvicorn

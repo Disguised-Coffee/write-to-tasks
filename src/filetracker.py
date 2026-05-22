@@ -55,7 +55,7 @@ class FileSaveHandler(FileSystemEventHandler):
             full_file_content = "".join(fresh_lines)
             
             # Send BOTH variables to your FastAPI /generate endpoint
-            self.send_to_fastapi(full_file_content, modification_note) 
+            self.send_to_agent(full_file_content, modification_note) 
     
     
     def on_modified(self, event):
@@ -73,7 +73,7 @@ class FileSaveHandler(FileSystemEventHandler):
         self.debounce_timer = Timer(5, self.check_for_changes)
         self.debounce_timer.start()
     
-    def send_to_fastapi(self, string_content, modification_note):
+    def send_to_agent(self, string_content, modification_note):
         logging.info("Settle period ended. Reading file and updating Google Tasks...")
         try:
 
@@ -84,7 +84,7 @@ class FileSaveHandler(FileSystemEventHandler):
             
             # we'll call generate_content here to parse the conten
             notif.send_notif(title="File change detected!", message="Your changes have been detected and are being processed. Check logs for details.")
-            # agent.generate_content(payload)
+            agent.generate_content(payload)
 
         except Exception as e:
             logging.error(f"❌ Failed to sync: {e}")
@@ -112,7 +112,7 @@ class FileSaveHandler(FileSystemEventHandler):
             logging.error(f"Error saving file tracker configuration: {e}")
             return False
         
-        asyncio.run(notif.send_notif(title="File Tracker Updated", message=f"File tracker is now watching {file_path} for changes."))
+        notif.send_notif(title="File Tracker Updated", message=f"File tracker is now watching {file_path} for changes.")
         return True
 
 
