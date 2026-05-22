@@ -5,11 +5,17 @@ from fastapi import FastAPI
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+import agent
+
+import notif
+import asyncio
+
+FILE_PROMPT = """Create or update Google Tasks based on the following user modifications to their file. Only respond with the Google Tasks API calls needed to reflect the following changes the user made in the file:"""
+
+logging.basicConfig(level=logging.INFO)
+
 # Allow us to get difference from a file's previous content to its new content, so we can be smarter about what to update in Google Tasks instead of just wiping and re-adding everything every time.
 import difflib
-
-# file to track for changes
-WATCHED_FILE = "./todo.txt"
 
 # 1. Define your file save logic just like before
 class FileSaveHandler(FileSystemEventHandler):
@@ -20,25 +26,30 @@ class FileSaveHandler(FileSystemEventHandler):
         self.file_cache = self.load_file_lines()
 
     def load_file_lines(self):
+        if not self.file_path:
+            logging.warning("No file path set for FileSaveHandler. Please set the file to track before starting the server.")
+            return []
         try:
             with open(self.file_path, "r", encoding="utf-8") as f:
                 return f.readlines()
         except FileNotFoundError:
+            # If the file doesn't exist yet, we'll raise a warning to our server
+            # hopefully the user sees this.
             return []
         
     def check_for_changes(self):
-    # 1. Read the fresh state of the file after the save event
+        # Read the fresh state of the file after the save event
         fresh_lines = self.load_file_lines()
         
-        # 2. Use Python's built-in difflib to find exactly what lines were added
+        # Use Python's built-in difflib to find exactly what lines were added
         diff = difflib.ndiff(self.file_cache, fresh_lines)
-        # print([a for a in diff]) # For debugging: See the diff output in the console
         added_lines = [line[2:].strip() for line in diff if line.startswith('+ ')]
         
         # 3. Update the memory cache so it's ready for the next save
         self.file_cache = fresh_lines
         
-        # 4. Format a nice "modification note" for Gemini
+        # Format a nice "modification note" for Gemini
+        # I may need figure out about this formatting, but for now let's just send a simple list of added lines.
         if added_lines:
             modification_note = f"User added the following lines:\n" + "\n".join([f"- {l}" for l in added_lines])
             full_file_content = "".join(fresh_lines)
@@ -48,39 +59,98 @@ class FileSaveHandler(FileSystemEventHandler):
     
     
     def on_modified(self, event):
-        if not event.is_directory and event.src_path.endswith("todo.txt"):
-            logging.info("💾 Save detected inside FastAPI handler!")
+        if not event.is_directory and event.src_path.endswith(self.file_path):
+            logging.info("Save detected inside FastAPI handler!")
             # (Your debounced Gemini/Google Tasks logic goes here)
             self.trigger_debounced_sync()
     
     def trigger_debounced_sync(self):
-        # 3. If a save event happens while we are already waiting, cancel the old timer
+        # If a save event happens while we are already waiting, cancel the old timer
         if self.debounce_timer is not None:
             self.debounce_timer.cancel()
 
-        # 4. Start a fresh 1.5-second countdown. 
-        # If no more changes happen in 1.5 seconds, execute 'send_to_fastapi'
-        self.debounce_timer = Timer(1.5, self.check_for_changes)
+        # If no more changes happen in 5 seconds, execute 'send_to_fastapi'
+        self.debounce_timer = Timer(5, self.check_for_changes)
         self.debounce_timer.start()
     
     def send_to_fastapi(self, string_content, modification_note):
-        logging.info("🚀 Settle period ended. Reading file and updating Google Tasks...")
+        logging.info("Settle period ended. Reading file and updating Google Tasks...")
         try:
 
-            # Prepare payload for the FastAPI endpoint we designed earlier
-            payload = {
-                "file_content": string_content,
-                "modification_note": modification_note,
-                "existing_tasks": [] # Ideally fetch current tasks from Google first!
-            }
+            # Send a combined payload to generate_content
+            payload = f"{FILE_PROMPT}\n {modification_note}\n\nCurrent full file content:\n{string_content}"
 
-            logging.info(f"📡 Sending content to FastAPI: {payload}")
-            # we'll have to have to reformat the payload to match generate_content()'s expected input
-            # this also a note to investigate context caching
-            # []
+            logging.info(f"Sending content to FastAPI:\n{"*"*20}\n{payload}")
+            
+            # we'll call generate_content here to parse the conten
+            notif.send_notif(title="File change detected!", message="Your changes have been detected and are being processed. Check logs for details.")
+            # agent.generate_content(payload)
 
         except Exception as e:
             logging.error(f"❌ Failed to sync: {e}")
+    
+    def set_file_to_tracked(self, file_path) -> bool:
+        self.file_path = file_path
+        self.file_cache = self.load_file_lines()
+        # check if file exists and is readable
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                logging.info(f"File tracker is now set to watch {file_path} for changes.")
+        except FileNotFoundError:
+            notif.send_error_notif(title="File Not Found", message=f"File {file_path} not found. Please ensure the file exists and the path is correct.")
+            logging.error(f"File {file_path} not found. Please ensure the file exists and the path is correct.")
+            return False
+        except Exception as e:
+            logging.error(f"Error setting file to track: {e}")
+            return False
+        
+        # also record this in json
+        try:
+            with open("user.config.json", "w") as f:
+                    json.dump({"file_to_track": file_path}, f, indent=4)
+        except Exception as e:
+            logging.error(f"Error saving file tracker configuration: {e}")
+            return False
+        
+        asyncio.run(notif.send_notif(title="File Tracker Updated", message=f"File tracker is now watching {file_path} for changes."))
+        return True
+
+
+# open the json figuration file and read the name of the file to track, then initialize the FileSaveHandler with that file path
+import json
+CONFIG_FILE = "user.config.json"
+def get_file_config():
+    logging.info(f" Reading file tracker configuration from {CONFIG_FILE}...")
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            config = json.load(f)
+            return config.get("file_to_track")
+    except FileNotFoundError:
+        # create a default config file if it doesn't exist, so the user has a template to work with
+        logging.warning(f"{CONFIG_FILE} not found. A default config file has been created. Please edit it to set the file you want to track for changes.")
+        default_config = {
+            "file_to_track": "todo.txt"
+        }
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(default_config, f, indent=4)
+        return "todo.txt" # default file to track if config is missing
+    except json.decoder.JSONDecodeError:
+        logging.error(f" Invalid JSON in {CONFIG_FILE}. Please check the file format.")
+        
+        exit(1)
+    except Exception as e:
+        logging.error("Issues with the config file will prevent the file tracker from working. Please resolve any issues and restart the server.")
+        logging.error(f"Error details: {e}")
+        exit(1)
+    
+config = get_file_config()
+WATCHED_FILE = config if config else None
+
+handler = FileSaveHandler(file_path=WATCHED_FILE)
+
+# expose set_file_to_tracked so that main.py can call it to set the file path before the server starts
+def set_file_to_tracked(file_path):
+    return handler.set_file_to_tracked(file_path)
 
 # 2. Define the Lifespan Manager
 @asynccontextmanager
@@ -94,9 +164,8 @@ async def lifespan(app: FastAPI):
     # --- BEFORE SERVER STARTS ---
     logging.info("🎬 Starting up file watcher thread...")
     
-    event_handler = FileSaveHandler(file_path=WATCHED_FILE)
     observer = Observer()
-    observer.schedule(event_handler, path=".", recursive=False)
+    observer.schedule(handler, path=".", recursive=False)
     
     # Spin up the background thread. Because FastAPI keeps running,
     # we DO NOT call observer.join() here, otherwise the server would freeze up!

@@ -11,6 +11,9 @@ from pydantic import BaseModel
 class GenerateRequest(BaseModel):
     prompt: str
 
+class BindRequest(BaseModel):
+    file_path: str
+
 app = FastAPI(lifespan=filetracker.lifespan)
 
 @app.get("/")
@@ -26,6 +29,19 @@ def generate(request: GenerateRequest):
     if("error" in resp):
         raise HTTPException(status_code=500, detail=resp["error"])
     return resp
+
+@app.post("/bind")
+def bind(request: BindRequest):
+    """Sets file path to track"""
+    try:
+        resp = filetracker.set_file_to_tracked(request.file_path)
+        if resp:
+            return {"message": f"File tracker is now watching {request.file_path} for changes."}
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to set file to track: {request.file_path}. Check logs for details.")
+    except Exception as e:
+        logging.error(f"Error setting file to track: {e}")
+        raise HTTPException(status_code=500, detail=f"Error setting file to track: {e}")
 
 @app.get("/status")
 def status():
