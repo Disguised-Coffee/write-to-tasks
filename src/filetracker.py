@@ -93,60 +93,21 @@ class FileSaveHandler(FileSystemEventHandler):
         self.file_path = file_path
         self.file_cache = self.load_file_lines()
         # check if file exists and is readable
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                logging.info(f"File tracker is now set to watch {file_path} for changes.")
-        except FileNotFoundError:
-            notif.send_error_notif(title="File Not Found", message=f"File {file_path} not found. Please ensure the file exists and the path is correct.")
-            logging.error(f"File {file_path} not found. Please ensure the file exists and the path is correct.")
-            return False
-        except Exception as e:
-            logging.error(f"Error setting file to track: {e}")
-            return False
-        
-        # also record this in json
-        try:
-            with open("user.config.json", "w") as f:
-                    json.dump({"file_to_track": file_path}, f, indent=4)
-        except Exception as e:
-            logging.error(f"Error saving file tracker configuration: {e}")
-            return False
+        config.set("file_to_check", file_path)
         
         notif.send_notif(title="File Tracker Updated", message=f"File tracker is now watching {file_path} for changes.")
         return True
 
 
 # open the json figuration file and read the name of the file to track, then initialize the FileSaveHandler with that file path
-import json
-CONFIG_FILE = "user.config.json"
-def get_file_config():
-    logging.info(f" Reading file tracker configuration from {CONFIG_FILE}...")
-    try:
-        with open(CONFIG_FILE, "r") as f:
-            config = json.load(f)
-            return config.get("file_to_track")
-    except FileNotFoundError:
-        # create a default config file if it doesn't exist, so the user has a template to work with
-        logging.warning(f"{CONFIG_FILE} not found. A default config file has been created. Please edit it to set the file you want to track for changes.")
-        default_config = {
-            "file_to_track": "todo.txt"
-        }
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(default_config, f, indent=4)
-        return "todo.txt" # default file to track if config is missing
-    except json.decoder.JSONDecodeError:
-        logging.error(f" Invalid JSON in {CONFIG_FILE}. Please check the file format.")
-        
-        exit(1)
-    except Exception as e:
-        logging.error("Issues with the config file will prevent the file tracker from working. Please resolve any issues and restart the server.")
-        logging.error(f"Error details: {e}")
-        exit(1)
-    
-config = get_file_config()
-WATCHED_FILE = config if config else None
+# import json
+import config
+CONFIG_FILE = config.get("file_to_check", None)
+if not CONFIG_FILE:
+    logging.warning("No file to track specified in configuration. Please set 'config_file' in user.config.json to the file you want to track for changes.")
+    exit(1)
 
-handler = FileSaveHandler(file_path=WATCHED_FILE)
+handler = FileSaveHandler(file_path=CONFIG_FILE)
 
 # expose set_file_to_tracked so that main.py can call it to set the file path before the server starts
 def set_file_to_tracked(file_path):

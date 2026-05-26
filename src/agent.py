@@ -93,7 +93,7 @@ def create_google_tasks(task_items: list[TaskItem]) -> dict:
 def update_google_tasks(task_items: list[TaskItem]) -> dict:
     """
     Queries the Google Tasks API to update existing tasks with the given titles, due dates, and optional descriptions.
-    Use this tool whenever the user explicitly asks to update existing tasks in Google Tasks.
+    Use this tool whenever the user explicitly asks to update or modify existing tasks in Google Tasks.
 
     Each TaskItem has the following structure:
         - title (str): The title of the task to be updated in Google Tasks.

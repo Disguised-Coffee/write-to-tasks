@@ -13,6 +13,7 @@ import logging
 from pydantic import BaseModel
 
 import notif
+import config
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -28,6 +29,7 @@ class TaskItem(BaseModel):
     title: str
     due_date: str | None
     description: str | None
+    google_task_id: str | None = None # This will store the ID of the task in Google Tasks once it's created, which can be useful for modifying existing tasks
 
 from typing import Optional
 from sqlmodel import Field, Session, SQLModel, create_engine, select, Relationship
@@ -62,21 +64,9 @@ class CachedGoogleTask(SQLModel, table=True):
 SQLITE_URL = "sqlite:///tasks.db"
 engine = create_engine(SQLITE_URL)
 
-most_recent_check = None
-
 def init_db():
     # This automatically generates the tables based on your classes above
     SQLModel.metadata.create_all(engine)
-
-    global most_recent_check
-
-    # we'll also load the date of the most recent check from our config file to keep track of when we last cached tasks from Google Tasks
-    try:
-        with open("user.config.json", "r") as f:
-            config = json.load(f)
-            most_recent_check = config.get("most_recent_check", None)
-    except Exception as e:
-        logging.error(f"Error initializing config file: {e}")
 
     # and then try updating the cache with the most recent tasks from Google Tasks
     # cache_google_tasks(get_tasks())
@@ -91,10 +81,16 @@ def check_db():
         logging.error(f"Database connection failed or Task table is not accessible: {e}")
 
 def cache_google_tasks() -> None:
-    """Utility function to cache the most recent list of tasks from Google Tasks in our database for quick retrieval"""
+    """
+    Utility function to cache the most recent list of tasks from Google Tasks in our database for quick retrieval
+    
+    TODO:
+        - account for pagination if there are more than 100 tasks in the task list, since the Google Tasks API returns a maximum of 100 tasks per request. We can use the "nextPageToken" in the API response to retrieve additional pages of tasks until we've cached all tasks.
+
+    """
     # we'll get the date of the most recent update stored from our config file,
     # and retrieve tasks from Google Tasks from that date onward.
-    global most_recent_check
+    most_recent_check = config.get("most_recent_check", None)
     
     if not most_recent_check:
         logging.info("Caching all tasks from Google Tasks to DB...")
@@ -133,11 +129,7 @@ def cache_google_tasks() -> None:
     # and then update the most recent check date in our config file
     # as RFC 3339 format, e.g. "2024-12-31T23:59:00.000Z"
     most_recent_check = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    try:
-        with open("user.config.json", "w") as f:
-            json.dump({"most_recent_check": most_recent_check}, f, indent=4)
-    except Exception as e:
-        logging.error(f"Error updating config file with most recent check date: {e}")
+    config.set("most_recent_check", most_recent_check)
     logging.info(f"Google Tasks caching complete. Most recent check date updated to {most_recent_check}!")
 
 

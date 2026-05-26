@@ -1,13 +1,16 @@
+import logging
+logging.basicConfig(level=logging.INFO)
+
+import config
+config.load_user_config()
+
 import agent
 import filetracker
 import dotenv
 dotenv.load_dotenv()
 import os
 
-import logging
-
 import tasks
-logging.basicConfig(level=logging.DEBUG)
 
 # server dependencies
 from fastapi import FastAPI, HTTPException
@@ -61,6 +64,9 @@ def action(action: str, task_id: str | None = None):
     Parameters:
         - action: The action to perform, either "approve", "deny", or "clear"
         - task_id: The ID of the task batch to approve or deny. Not required for "clear" action.
+
+    TODO:
+        - convert HTTPException details to JSON, e.g. {"status": "error", "message": "Detailed error message here"}
     """
     try:
         resp = None
@@ -78,12 +84,12 @@ def action(action: str, task_id: str | None = None):
                 resp = tasks.clear_pending_batches()
                 if resp.get("error"):
                     raise HTTPException(status_code=500, detail=resp["error"])
-                return {"message": "All pending batches have been cleared (rejected)."}
+                return HTTPException(status_code=200, detail={"status": "success","message": "All pending batches have been cleared (rejected)."})
             case _:
                 raise HTTPException(status_code=400, detail="Invalid action. Must be 'approve' or 'deny'.")
         if(resp.get("error")):
             raise HTTPException(status_code=500, detail=resp["error"])
-        return {"message": f"Action '{action}' has been processed for task batch {task_id}."}
+        return HTTPException(status_code=200, detail={"status": "success", "message": f"Action '{action}' has been processed for task batch {task_id}."})
     except Exception as e:
         logging.error(f"Error processing action for task {task_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing action for task {task_id}: {e}")
@@ -99,13 +105,23 @@ def pending():
         logging.error(f"Error retrieving pending batches: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving pending batches: {e}")
 
+@app.get("/tasks")
+def get_tasks():
+    """Endpoint for retrieving the current list of tasks from our cache (which is updated whenever a batch is approved)"""
+    try:
+        tasks_data = tasks.get_tasks()
+        if tasks_data.get("status") == "error":
+            raise HTTPException(status_code=500, detail=tasks_data.get("error"))
+        return {"last_update": config.get("most_recent_check", None), "tasks": tasks_data.get("cached", [])}
+    except Exception as e:
+        logging.error(f"Error retrieving tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving tasks: {e}")
+
 if __name__ == "__main__":
     # try to authenticate with the Google API to ensure credentials are set up correctly
     tasks.test_credentials()
     tasks.init_db()
     tasks.cache_google_tasks()
-
-    print(tasks.get_tasks())
 
     if (os.getenv("DEV_SERVER", "False").lower() == "true"):
         logging.debug("Starting server in development mode with hot reload...")
