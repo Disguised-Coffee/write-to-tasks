@@ -27,28 +27,25 @@ creds = None
 def generate_content(prompt:str) -> dict:
     """Generate content using the Gemini API based on the provided prompt"""
     logging.info(f"Received prompt: {prompt}")
-    # try:
-    #     logging.info("Generating content...")
-    #     response = client.models.generate_content(
-    #         model="gemma-4-31b-it", # "gemini-2.5-flash",
-    #         contents=prompt,
-    #         config=types.GenerateContentConfig(
-    #             max_output_tokens=500,
-    #             tools=[create_google_task],
-    #             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False), # Not needed, as the SDK will automatically call the function when the response contains a function call
-    #             system_instruction=[SYSTEM_INSTRUCTION]
-    #         ),
-    #     )
+    try:
+        logging.info("Generating content...")
+        response = client.models.generate_content(
+            model="gemma-4-31b-it", # "gemini-2.5-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                max_output_tokens=500,
+                tools=[create_google_task],
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False), # Not needed, as the SDK will automatically call the function when the response contains a function call
+                system_instruction=[SYSTEM_INSTRUCTION]
+            ),
+        )
 
-    #     logging.info(f"Generated content: {response.text}")
+        logging.info(f"Generated content: {response.text}")
 
-    #     return {"message": response.text}
-    # except Exception as e:
-    #     logging.error(f"Error generating content: {e}")
-    #     return {"error": str(e)}
-    create_google_task("Test Task from Agent", "2024-12-31T23:59:00.000Z", "This is a test task created by the agent.")
-    return {"message": "Task creation function called successfully."}
-
+        return {"message": response.text}
+    except Exception as e:
+        logging.error(f"Error generating content: {e}")
+        return {"error": str(e)}
 
 # Tools for LLM agents
 # Note, since we are using Automatic Function Calling, the LLM agent will be given a schema

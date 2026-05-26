@@ -147,6 +147,29 @@ def reject_task(batch_id: int) -> dict:
     except Exception as e:
         logging.error(f"Error rejecting task batch: {e}")
         return {"status": "error", "error": f"Error rejecting task batch: {e}"}
+    
+def get_pending_tasks() -> list[dict]:
+    """Returns a list of pending tasks that require user approval"""
+    try:
+        with Session(engine) as session:
+            pending_batches = session.exec(select(Batch).where(Batch.status == "pending")).all()
+            pending_tasks = []
+            for batch in pending_batches:
+                for job in batch.tasks:
+                    task = session.exec(select(Task).where(Task.id == job.task_id)).first()
+                    if task:
+                        pending_tasks.append({
+                            "batch_id": batch.id,
+                            "task_id": task.id,
+                            "title": task.title,
+                            "due_date": task.due_date,
+                            "description": task.description,
+                            "action": job.action
+                        })
+            return pending_tasks
+    except Exception as e:
+        logging.error(f"Error retrieving pending tasks: {e}")
+        return []
 
 def google_tasks_handler(batch_id: int, jobs_data: list[tuple]) -> dict:    
     """Creates multiple Google Tasks using the API with the given title, due date, and description"""

@@ -19,6 +19,10 @@ class GenerateRequest(BaseModel):
 class BindRequest(BaseModel):
     file_path: str
 
+class ActionRequest(BaseModel):
+    task_id: str # keep this as is, we may want to move to this later
+    action: str  # "approve" or "deny"
+
 app = FastAPI(lifespan=filetracker.lifespan)
 
 @app.get("/")
@@ -51,6 +55,34 @@ def bind(request: BindRequest):
 @app.get("/status")
 def status():
     return {"status": "healthy"}
+
+# we'll also make a general-purpose approve/deny endpoint for allowing/disallowing created tasks into Google Tasks
+@app.post("/action")
+def action(request: ActionRequest):
+    """Endpoint for handling approve/deny actions on created tasks"""
+    try:
+        if request.action == "approve":
+            tasks.approve_task(int(request.task_id))
+            return {"message": f"Task {request.task_id} approved and added to Google Tasks."}
+        elif request.action == "deny":
+            tasks.reject_task(int(request.task_id))
+            return {"message": f"Task {request.task_id} denied and will not be added to Google Tasks."}
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action. Must be 'approve' or 'deny'.")
+    except Exception as e:
+        logging.error(f"Error processing action for task {request.task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing action for task {request.task_id}: {e}")
+    
+# we should also be able to get a list of pending tasks for approval
+@app.get("/pending")
+def pending():
+    """Endpoint for retrieving a list of pending tasks that require user approval"""
+    try:
+        pending = tasks.get_pending_tasks()
+        return {"pending_tasks": pending}
+    except Exception as e:
+        logging.error(f"Error retrieving pending tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving pending tasks: {e}")
 
 if __name__ == "__main__":
     # try to authenticate with the Google API to ensure credentials are set up correctly
