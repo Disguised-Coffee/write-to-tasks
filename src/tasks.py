@@ -230,7 +230,7 @@ def approve_batch(batch_id: int) -> dict:
             # pass batch.tasks to a function that will loop through them and create/modify/delete tasks in Google Tasks based on the action specified in each job
             # Make a copy of task IDs and actions before session closes to avoid detached instance errors
             jobs_data = [(job.id, job.task_id, job.action) for job in batch.tasks]
-            resp = google_tasks_handler(batch_id, jobs_data)
+            resp = google_tasks_handler(jobs_data)
             # print(resp)
             if(resp.get("status") == "success"):
                 # remove the batch from the database after approval
