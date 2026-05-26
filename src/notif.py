@@ -1,4 +1,5 @@
 """Interface for sending desktop notifications to the user. This is used to notify the user of important events, such as when a task is completed or when a new task is added."""
+import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
@@ -14,8 +15,7 @@ from desktop_notifier import Button, DesktopNotifier, DEFAULT_SOUND, ReplyField,
 
 notifier = DesktopNotifier(app_name="Write-To-Tasks")
 
-ICON_PATH = "C:/repository/write-to-tasks/src/assets/thinking-blue.png"  # Update with the actual path to your icon
-
+ICON_PATH = os.path.join(os.getcwd(), "src\\assets\\thinking-blue.png")
 
 def _get_event_loop():
     """Get or create an event loop for the background thread."""
