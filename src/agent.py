@@ -3,6 +3,7 @@ import dotenv
 dotenv.load_dotenv()
 import logging
 logging.basicConfig(level=logging.INFO)
+import asyncio
 
 import tasks
 
@@ -26,25 +27,27 @@ creds = None
 def generate_content(prompt:str) -> dict:
     """Generate content using the Gemini API based on the provided prompt"""
     logging.info(f"Received prompt: {prompt}")
-    try:
-        logging.info("Generating content...")
-        response = client.models.generate_content(
-            model="gemma-4-31b-it", # "gemini-2.5-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=500,
-                tools=[create_google_task],
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False), # Not needed, as the SDK will automatically call the function when the response contains a function call
-                system_instruction=[SYSTEM_INSTRUCTION]
-            ),
-        )
+    # try:
+    #     logging.info("Generating content...")
+    #     response = client.models.generate_content(
+    #         model="gemma-4-31b-it", # "gemini-2.5-flash",
+    #         contents=prompt,
+    #         config=types.GenerateContentConfig(
+    #             max_output_tokens=500,
+    #             tools=[create_google_task],
+    #             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False), # Not needed, as the SDK will automatically call the function when the response contains a function call
+    #             system_instruction=[SYSTEM_INSTRUCTION]
+    #         ),
+    #     )
 
-        logging.info(f"Generated content: {response.text}")
+    #     logging.info(f"Generated content: {response.text}")
 
-        return {"message": response.text}
-    except Exception as e:
-        logging.error(f"Error generating content: {e}")
-        return {"error": str(e)}
+    #     return {"message": response.text}
+    # except Exception as e:
+    #     logging.error(f"Error generating content: {e}")
+    #     return {"error": str(e)}
+    create_google_task("Test Task from Agent", "2024-12-31T23:59:00.000Z", "This is a test task created by the agent.")
+    return {"message": "Task creation function called successfully."}
 
 
 # Tools for LLM agents
@@ -63,8 +66,11 @@ def create_google_task(title: str, due_date: str | None, description: str | None
         description (str | None): An optional description or notes for the task.
     """
     logging.info(f"Executing Google API call: Creating task '{title}' due on {due_date}")
-    # call query function here
-    return tasks.query_create_task(title, due_date, description)
+    
+    # we don't want to a database query to interfere with the responsiveness of the agent, so we'll run the query in a separate thread using asyncio
+    asyncio.run(tasks.query_create_task(title, due_date, description))
+
+    return {"status": "success", "message": f"Task '{title}' due on {due_date} has been querried (pending user approval)."}
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

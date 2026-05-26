@@ -56,19 +56,19 @@ def check_db():
     try:
         with Session(engine) as session:
             session.exec(select(Task)).first()
-        logging.info("Database connection successful and Task table is accessible.")
+        logging.debug("Database connection successful and Task table is accessible.")
     except Exception as e:
         logging.error(f"Database connection failed or Task table is not accessible: {e}")
 
 
-def query_create_task(title: str, due_date: str | None, description: str | None = None) -> dict:    
+async def query_create_task(title: str, due_date: str | None, description: str | None = None) -> None:    
     """Interface to query a task to create into a database for user to approve before storing in Google Tasks"""
     # some db logic here
 
     # Looks like a mess
     # we want to create a task wwith the title, due date, and description that Gemini suggested,
     # and store that in a job 
-    logging.info(f"Staging new task for approval: '{title}' due on {due_date}. Waiting for user approval...")
+    logging.debug(f"Staging new task for approval: '{title}' due on {due_date}. Waiting for user approval...")
 
     try:
 
@@ -77,28 +77,21 @@ def query_create_task(title: str, due_date: str | None, description: str | None 
             session.add(staged_task)
             session.flush()
             if staged_task.id is None:
-                logging.error("Failed to create staged task in the database.")
-                return {"status": "error", "error": "Failed to create staged task in the database."}
+                raise ValueError("Failed to create staged task in the database.")
             new_batch = Batch(tasks=[Job(task_id=staged_task.id, action="create")])
             
-            print("adding...")
             session.add(new_batch)
-            print("committing...")
             session.commit()
             session.refresh(new_batch)  # Ensures the ID is populated
             batch_id = new_batch.id
             if batch_id is None:
                 logging.error("Failed to create task batch in the database.")
-                return {"status": "error", "error": "Failed to create task batch in the database."}
             else:
                 # send a desktop notification to the user to approve the task creation, with a callback that
-                logging.info(f"New task batch created with ID {batch_id} for task '{title}' due on {due_date}. Waiting for user approval...")
-                notif.send_notif(title="Creating Task...", message=f"Gemini is creating task '{title}' due on {due_date}.", on_click_callback=lambda: approve_task(batch_id=batch_id))
+                logging.debug(f"New task batch created with ID {batch_id} for task '{title}' due on {due_date}. Waiting for user approval...")
+                notif.send_choice_notif(title="Creating Task...", message=f"Gemini is creating task '{title}' due on {due_date}.", choices=[("Approve", lambda: approve_task(batch_id=batch_id)), ("Reject", lambda: reject_task(batch_id=batch_id))])
     except Exception as e:
         logging.error(f"Error creating task batch in the database: {e}")
-        return {"status": "error", "error": f"Error creating task batch in the database: {e}"}
-    
-    return {"status": "staged", "task_title": title, "batch_id": new_batch.id}
 
 def approve_task(batch_id: int) -> dict:
     """Once the user approves a staged task, this function is called to actually create the task in Google Tasks"""
@@ -110,22 +103,52 @@ def approve_task(batch_id: int) -> dict:
                 return {"status": "error", "error": f"Batch with ID {batch_id} not found."}
             
             # pass batch.tasks to a function that will loop through them and create/modify/delete tasks in Google Tasks based on the action specified in each job
-            status = google_tasks_handler(batch.tasks)
-
-            if(status == "success"):
+            # Make a copy of task IDs and actions before session closes to avoid detached instance errors
+            jobs_data = [(job.id, job.task_id, job.action) for job in batch.tasks]
+            resp = google_tasks_handler(batch_id, jobs_data)
+            # print(resp)
+            if(resp.get("status") == "success"):
                 # remove the batch from the database after approval
+                for job in batch.tasks:
+                    task = session.exec(select(Task).where(Task.id == job.task_id)).first()
+                    if task:
+                        session.delete(task)
+                    session.delete(job)
                 session.delete(batch)
                 session.commit()
+                logging.debug(f"Task batch with ID {batch_id} has been approved and processed successfully.")
                 return {"status": "approved"}
             else:
-                logging.error(f"Error processing task batch: {status.get('error', 'Unknown error')}")
-                return {"status": "error", "error": f"Error processing task batch: {status.get('error', 'Unknown error')}"}
+                logging.error(f"Error processing task batch: {resp.get('error', 'Unknown error')}")
+                return {"status": "error", "error": f"Error processing task batch: {resp.get('error', 'Unknown error')}"}
     except Exception as e:
         logging.error(f"Error approving task batch: {e}")
         return {"status": "error", "error": f"Error approving task batch: {e}"}
     
+def reject_task(batch_id: int) -> dict:
+    """If the user rejects a staged task, this function is called to remove the staged task from the database"""
+    try:
+        with Session(engine) as session:
+            batch = session.exec(select(Batch).where(Batch.id == batch_id)).first()
+            if not batch:
+                logging.error(f"Batch with ID {batch_id} not found.")
+                return {"status": "error", "error": f"Batch with ID {batch_id} not found."}
+            
+            # delete the batch and its associated jobs and tasks from the database
+            for job in batch.tasks:
+                task = session.exec(select(Task).where(Task.id == job.task_id)).first()
+                if task:
+                    session.delete(task)
+                session.delete(job)
+            session.delete(batch)
+            session.commit()
+            logging.debug(f"Task batch with ID {batch_id} has been rejected and removed from the database.")
+            return {"status": "rejected"}
+    except Exception as e:
+        logging.error(f"Error rejecting task batch: {e}")
+        return {"status": "error", "error": f"Error rejecting task batch: {e}"}
 
-def google_tasks_handler(jobs: list[Job]) -> dict:    
+def google_tasks_handler(batch_id: int, jobs_data: list[tuple]) -> dict:    
     """Creates multiple Google Tasks using the API with the given title, due date, and description"""
     creds = None
     # The file token.json stores the user's access and refresh tokens, and is
@@ -143,27 +166,34 @@ def google_tasks_handler(jobs: list[Job]) -> dict:
 
         batch = service.new_batch_http_request()
 
-        for job in jobs:
-            match job.action:
-                case "create":
-                    batch.add(
-                        tasks.insert(
-                            tasklist=TASKLIST_ID,
-                            body={
-                                "title": job.task.title,
-                            "notes": job.task.description if job.task.description else "", # Add description as notes if provided
-                            "due": job.task.due_date # need to transform the due date into RFC3339 format if provided, e.g. "2024-12-31T23:59:00.000Z"
-                            }
+        # Fetch fresh task data within this function's session
+        with Session(engine) as session:
+            for job_id, task_id, action in jobs_data:
+                task = session.exec(select(Task).where(Task.id == task_id)).first()
+                if not task:
+                    logging.error(f"Task with ID {task_id} not found.")
+                    continue
+                
+                match action:
+                    case "create":
+                        batch.add(
+                            tasks.insert(
+                                tasklist=TASKLIST_ID,
+                                body={
+                                    "title": task.title,
+                                "notes": task.description if task.description else "", # Add description as notes if provided
+                                "due": task.due_date # need to transform the due date into RFC3339 format if provided, e.g. "2024-12-31T23:59:00.000Z"
+                                }
+                            )
                         )
-                    )
-                    logging.info(f"Task '{job.task.title}' created successfully in Google Tasks with due date {job.task.due_date}")
-                case _:
-                    logging.error(f"Unsupported job action: {job.action}")
+                        logging.debug(f"Task '{task.title}' created successfully in Google Tasks with due date {task.due_date}")
+                    case _:
+                        logging.error(f"Unsupported job action: {action}")
+        
         batch.execute()
         return {"status": "success"}
     except HttpError as err:
         logging.error(f"Error authenticating with Google API: {err}")
-        print(err)
         return {"status": "error", "error": "Error creating task: Possibly an authentication issue with the Google API."}
 
 
@@ -194,7 +224,7 @@ def test_credentials():
     try:
         service = build("tasks", "v1", credentials=creds)
         service.tasklists().get(tasklist=TASKLIST_ID).execute() # Try to access the specified task list to verify credentials and permissions
-        logging.info("Google API credentials are valid. Starting server...")
+        logging.debug("Google API credentials are valid. Starting server...")
     except HttpError as err:
         logging.error(f"Error authenticating with Google API: {err}")
         raise err

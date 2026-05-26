@@ -2,6 +2,9 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
+from typing import List, Tuple, Callable, Any
+import logging
+logging.basicConfig(level=logging.INFO)
 
 # Create a thread pool executor for running async code
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -34,6 +37,26 @@ def send_notif(title: str, message: str, on_click_callback=None):
     
     loop = _get_event_loop()
     asyncio.run_coroutine_threadsafe(_send(), loop)
+
+def send_choice_notif(title: str, message: str, choices: List[Tuple[str, Callable[..., Any]]]):
+    """Send a notification with multiple choice buttons."""
+    async def _send_choice():
+        try:
+            buttons = [Button(title=label, on_pressed=callback) for label, callback in choices]
+            await notifier.send(
+                title=title,
+                message=message,
+                sound=DEFAULT_SOUND,
+                buttons=buttons,
+            )
+            # Wait for the user to click a button and call the corresponding callback
+        except Exception as e:
+            logging.error(f"Error sending choice notification: {e}")
+        
+
+    loop = _get_event_loop()
+    asyncio.run_coroutine_threadsafe(_send_choice(), loop)
+    
 
 def send_error_notif(title: str, message: str, on_click_callback=None):
     """Send an error notification synchronously."""

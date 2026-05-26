@@ -1,5 +1,8 @@
 import agent
 import filetracker
+import dotenv
+dotenv.load_dotenv()
+import os
 
 import logging
 
@@ -53,7 +56,13 @@ if __name__ == "__main__":
     # try to authenticate with the Google API to ensure credentials are set up correctly
     tasks.test_credentials()
     tasks.init_db()
-    
-    # Run the server with hot reload for development
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+    if (os.getenv("DEV_SERVER", "False").lower() == "true"):
+        logging.debug("Starting server in development mode with hot reload...")
+        import uvicorn
+        uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+    else:    
+        # Run the server with hot reload for development
+        import uvicorn
+        uvicorn.run("main:app", host="0.0.0.0", port=8000)
