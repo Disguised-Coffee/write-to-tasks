@@ -1,11 +1,11 @@
 import os
 import dotenv
+from pydantic import BaseModel
 dotenv.load_dotenv()
 import logging
-logging.basicConfig(level=logging.INFO)
 import asyncio
 
-import tasks
+from tasks import TaskItem, create_batch
 
 SYSTEM_INSTRUCTION = """
                   You are a task master assistant that helps users create tasks in Google Tasks based on their input. 
@@ -34,7 +34,7 @@ def generate_content(prompt:str) -> dict:
             contents=prompt,
             config=types.GenerateContentConfig(
                 max_output_tokens=500,
-                tools=[create_google_task],
+                tools=[create_google_tasks],
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=False), # Not needed, as the SDK will automatically call the function when the response contains a function call
                 system_instruction=[SYSTEM_INSTRUCTION]
             ),
@@ -46,30 +46,90 @@ def generate_content(prompt:str) -> dict:
     except Exception as e:
         logging.error(f"Error generating content: {e}")
         return {"error": str(e)}
+    # 
+    # ---------------------------------------------------------------------------------------------------
+    # Comment above and uncomment this segment below to test with mock response without calling the Gemini API
+    # ---------------------------------------------------------------------------------------------------
+    # 
+    # tasks_data = [
+    #     {
+    #         "title": "Buy no groceries",
+    #         "due_date": "2024-07-01T17:00:00Z",
+    #         "description": "Milk, eggs, bread"
+    #     },
+    #     {
+    #         "title": "Finish project report",
+    #         "due_date": "2099-07-05T17:00:00Z",
+    #         "description": "Complete the final report for the project and submit it to the manager."
+    #     }
+    # ]
+    # create_google_tasks([tasks.TaskItem(**item) for item in tasks_data])
+    # return {"message": "Content generated successfully (mock response)"}
+
 
 # Tools for LLM agents
 # Note, since we are using Automatic Function Calling, the LLM agent will be given a schema
 # of the create_google_task function, and will call it directly when it determines that a task should be created based on the user's prompt.
 # 
 # HENCE, having a proper doc string and type annotations for the create_google_task function is crucial for the LLM agent to understand how to use it correctly.
-def create_google_task(title: str, due_date: str | None, description: str | None = None) -> dict:    
+def create_google_tasks(task_items: list[TaskItem]) -> dict:    
     """
-    Queries the Google Tasks API to create a new task with the given title, due date, and optional description.
-    Use this tool whenever the user explicitly asks to add, schedule, or remember a todo item.
+    Queries the Google Tasks API to create new tasks with the given titles, due dates, and optional descriptions.
+    Use this tool whenever the user explicitly asks to add, schedule, or remember todo items.
+
+    Each TaskItem has the following structure:
+        - title (str): The title of the task to be created in Google Tasks.
+        - due_date (str): The due date for the task in RFC 3339 format (e.g., "2024-07-01T17:00:00Z").
+        - description (str, optional): A description for the task.
 
     Args:
-        title (str): The title of the task to be created.
-        due_date (str | None): The due date of the task in RFC3339 format (e.g., "2024-12-31T23:59:00.000Z"). Optional.
-        description (str | None): An optional description or notes for the task.
+        task_items (list[tasks.TaskItem]): A list of TaskItem objects containing the task details.
     """
-    logging.info(f"Executing Google API call: Creating task '{title}' due on {due_date}")
-    
     # we don't want to a database query to interfere with the responsiveness of the agent, so we'll run the query in a separate thread using asyncio
-    asyncio.run(tasks.query_create_task(title, due_date, description))
+    asyncio.run(create_batch(task_items))
 
-    return {"status": "success", "message": f"Task '{title}' due on {due_date} has been querried (pending user approval)."}
+    return {"status": "success", "message": f"Tasks '{[item.title for item in task_items]}' have been querried (pending user approval)."}
+
+def update_google_tasks(task_items: list[TaskItem]) -> dict:
+    """
+    Queries the Google Tasks API to update existing tasks with the given titles, due dates, and optional descriptions.
+    Use this tool whenever the user explicitly asks to update existing tasks in Google Tasks.
+
+    Each TaskItem has the following structure:
+        - title (str): The title of the task to be updated in Google Tasks.
+        - due_date (str): The new due date for the task in RFC 3339 format (e.g., "2024-07-01T17:00:00Z").
+        - description (str, optional): A new description for the task.
+    Args:
+        task_items (list[TaskItem]): A list of TaskItem objects containing the updated task details.
+    """
+    pass
+
+def list_google_tasks() -> dict:
+    """
+    Queries the Google Tasks API to retrieve a list of existing tasks.
+    Use this tool whenever the user explicitly asks to list, show, or view their existing tasks in Google Tasks.
+
+    Returns:
+        list[TaskItem]: A list of TaskItem objects containing the existing tasks with their titles, due dates, and descriptions.
+    """
+    # This function can be implemented similarly to create_google_tasks, but instead of creating tasks, it will query the Google Tasks API to retrieve existing tasks and return them in a structured format for the LLM agent to use in its response to the user.
+    # pass
+    tasks_data = [
+        {
+            "title": "Buy no groceries",
+            "due_date": "2024-07-01T17:00:00Z",
+            "description": "Milk, eggs, bread"
+        },
+        {
+            "title": "Finish project report",
+            "due_date": "2099-07-05T17:00:00Z",
+            "description": "Complete the final report for the project and submit it to the manager."
+        }
+    ]
+    return {"status": "success", "tasks": [TaskItem(**item) for item in tasks_data]}
 
 if __name__ == "__main__":
+    from tasks import test_credentials
     logging.basicConfig(level=logging.INFO)
     logging.info("Run main.py to start the server. This script is not intended to run directly.")
-    tasks.test_credentials()
+    test_credentials()

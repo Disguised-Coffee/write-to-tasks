@@ -5,11 +5,14 @@ Because we want the user to approve suggested tasks from Gemini, we'll have to s
 where each job is a suggested task creation/modification that the user can approve or reject. Once 
 the user approves a job, we can then call the add_task function to create/modify the task in Google Tasks.
 """
+import datetime
+import json
 import os
 import logging
 
+from pydantic import BaseModel
+
 import notif
-logging.basicConfig(level=logging.INFO)
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -19,6 +22,12 @@ from googleapiclient.errors import HttpError
 # Google Tasks API client setup
 SCOPES = ["https://www.googleapis.com/auth/tasks"] # Scope for write access to Google Tasks
 TASKLIST_ID = os.getenv("TASKLIST_ID", "@default") # Use the default task list if not specified
+
+# Pydantic version of our tasks for agent tool schema
+class TaskItem(BaseModel):
+    title: str
+    due_date: str | None
+    description: str | None
 
 from typing import Optional
 from sqlmodel import Field, Session, SQLModel, create_engine, select, Relationship
@@ -38,18 +47,39 @@ class Job(SQLModel, table=True):
     batch_id: Optional[int] = Field(default=None, foreign_key="batch.id")
     batch: Optional["Batch"] = Relationship(back_populates="tasks")
 
-
 class Batch(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tasks: list[Job] = Relationship(back_populates="batch")
     status: str = "pending" # pending, approved, rejected. We likely won't need the rejected status, since when the user acts on a job, we can just delete it from the database
 
+class CachedGoogleTask(SQLModel, table=True):
+    """Utility table for storing the current list of tasks from Google Tasks for quick retrieval without needing to query the Google API every time"""
+    google_id: str = Field(primary_key=True) # Use Google's actual task ID
+    title: str
+    due_date: Optional[str] = None
+    notes: Optional[str] = None
+    
 SQLITE_URL = "sqlite:///tasks.db"
 engine = create_engine(SQLITE_URL)
+
+most_recent_check = None
 
 def init_db():
     # This automatically generates the tables based on your classes above
     SQLModel.metadata.create_all(engine)
+
+    global most_recent_check
+
+    # we'll also load the date of the most recent check from our config file to keep track of when we last cached tasks from Google Tasks
+    try:
+        with open("user.config.json", "r") as f:
+            config = json.load(f)
+            most_recent_check = config.get("most_recent_check", None)
+    except Exception as e:
+        logging.error(f"Error initializing config file: {e}")
+
+    # and then try updating the cache with the most recent tasks from Google Tasks
+    # cache_google_tasks(get_tasks())
 
 def check_db():
     """Check if the database is set up correctly by trying to query the Task table."""
@@ -60,40 +90,135 @@ def check_db():
     except Exception as e:
         logging.error(f"Database connection failed or Task table is not accessible: {e}")
 
+def cache_google_tasks() -> None:
+    """Utility function to cache the most recent list of tasks from Google Tasks in our database for quick retrieval"""
+    # we'll get the date of the most recent update stored from our config file,
+    # and retrieve tasks from Google Tasks from that date onward.
+    global most_recent_check
+    
+    if not most_recent_check:
+        logging.info("Caching all tasks from Google Tasks to DB...")
+    else:
+        logging.info(f"Caching tasks from Google Tasks updated since {most_recent_check} to DB...")
+    creds = get_credentials()
+    if not creds:
+        logging.error("Google API credentials not found. Please authenticate with the Google API before using this tool.")
+        return
+    try:
+        service = build("tasks", "v1", credentials=creds)
+        
+        if most_recent_check:
+            results = service.tasks().list(tasklist=TASKLIST_ID, updatedMin=most_recent_check).execute()
+        else:
+            results = service.tasks().list(tasklist=TASKLIST_ID).execute()
+        items = results.get("items", [])
+        if not items:
+            logging.info("No tasks found in Google Tasks to cache.")
+            return
+        with Session(engine) as session:
+            for item in items:
+                cached_task = CachedGoogleTask(
+                    google_id=item["id"],
+                    title=item["title"],
+                    due_date=item.get("due"),
+                    notes=item.get("notes")
+                )
+                session.add(cached_task)
+            session.commit()
+            logging.debug("Google Tasks have been cached successfully.")
+    except HttpError as err:
+        logging.error(f"Error authenticating with Google API: {err}")
+    except Exception as e:
+        logging.error(f"Error caching tasks from Google Tasks: {e}")
+    # and then update the most recent check date in our config file
+    # as RFC 3339 format, e.g. "2024-12-31T23:59:00.000Z"
+    most_recent_check = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    try:
+        with open("user.config.json", "w") as f:
+            json.dump({"most_recent_check": most_recent_check}, f, indent=4)
+    except Exception as e:
+        logging.error(f"Error updating config file with most recent check date: {e}")
+    logging.info(f"Google Tasks caching complete. Most recent check date updated to {most_recent_check}!")
 
-async def query_create_task(title: str, due_date: str | None, description: str | None = None) -> None:    
+
+def get_tasks() -> dict[str, list[TaskItem] | str]:
+    """
+        Utility function to get all tasks from Google Tasks
+
+        Ideally, we should be caching the most recent list of tasks from Google Tasks in our database, 
+        and only query Google Tasks for updates when necessary (e.g. when the user explicitly asks to 
+        list their tasks, or after we create/modify a task to refresh the cache). This way, we can 
+        minimize the number of API calls to Google Tasks and improve performance.
+
+        We'll be converting the cached tasks in our database into TaskItem objects to return to the 
+        agent when it calls the list_google_tasks tool, so it's important that the CachedGoogleTask 
+        table has the same structure as the TaskItem class for easy conversion.
+    """
+    try:
+        with Session(engine) as session:
+            cached_tasks = session.exec(select(CachedGoogleTask)).all()
+            return {"status": "success", "cached": [TaskItem(title=task.title, due_date=task.due_date, description=task.notes) for task in cached_tasks]}
+    except Exception as e:
+        logging.error(f"Error retrieving cached tasks from database: {e}")
+        return {"status": "error", "cached": []}
+
+async def create_batch(task_items: list[TaskItem]) -> None:    
     """Interface to query a task to create into a database for user to approve before storing in Google Tasks"""
-    # some db logic here
 
     # Looks like a mess
     # we want to create a task wwith the title, due date, and description that Gemini suggested,
     # and store that in a job 
-    logging.debug(f"Staging new task for approval: '{title}' due on {due_date}. Waiting for user approval...")
-
     try:
-
         with Session(engine) as session:
-            staged_task = Task(title=title, due_date=due_date, description=description)
-            session.add(staged_task)
-            session.flush()
-            if staged_task.id is None:
-                raise ValueError("Failed to create staged task in the database.")
-            new_batch = Batch(tasks=[Job(task_id=staged_task.id, action="create")])
-            
-            session.add(new_batch)
-            session.commit()
-            session.refresh(new_batch)  # Ensures the ID is populated
-            batch_id = new_batch.id
-            if batch_id is None:
-                logging.error("Failed to create task batch in the database.")
-            else:
-                # send a desktop notification to the user to approve the task creation, with a callback that
-                logging.debug(f"New task batch created with ID {batch_id} for task '{title}' due on {due_date}. Waiting for user approval...")
-                notif.send_choice_notif(title="Creating Task...", message=f"Gemini is creating task '{title}' due on {due_date}.", choices=[("Approve", lambda: approve_task(batch_id=batch_id)), ("Reject", lambda: reject_task(batch_id=batch_id))])
-    except Exception as e:
-        logging.error(f"Error creating task batch in the database: {e}")
+            # create a new batch for this set of tasks
+            batch = Batch()
+            session.add(batch)
+            session.flush() # flush to get the batch ID for the job relationship
 
-def approve_task(batch_id: int) -> dict:
+            for item in task_items:
+                logging.debug(f"Staging new task for approval: '{item.title}' due on {item.due_date}. Waiting for user approval...")
+
+                # create the tasks in the DB
+                task = Task(
+                    title=item.title,
+                    due_date=item.due_date,
+                    description=item.description
+                )
+                session.add(task)
+                session.flush() # flush to get the task ID for the job relationship
+                # create a job for this task with action "create"
+                if not task.id:
+                    logging.error("Failed to create task in database, task ID not generated.")
+                    continue
+                job = Job(
+                    task_id=task.id,
+                    action="create",
+                    batch_id=batch.id
+                )
+                session.add(job)
+
+            session.commit()
+            logging.info(f"Task batch with ID {batch.id} has been staged for approval successfully.")
+
+            # get the batch id....
+            # necessary to define as this way for Pylancer type errors
+            id = batch.id
+            if id is None:
+                logging.error("Batch ID is None after commit, cannot send notification for approval.")
+                return
+            
+            notif.send_choice_notif(
+                title="New Tasks Suggested",
+                message=f"{len(task_items)} new tasks have been suggested based on your recent file changes. Do you want to add them to Google Tasks?",
+                choices=[
+                    ("Approve", lambda: approve_batch(id)),
+                    ("Deny", lambda: reject_batch(id))
+                ]
+            )
+    except Exception as e:
+        logging.error(f"Error staging task for approval: {e}")
+
+def approve_batch(batch_id: int) -> dict:
     """Once the user approves a staged task, this function is called to actually create the task in Google Tasks"""
     try:
         with Session(engine) as session:
@@ -116,7 +241,12 @@ def approve_task(batch_id: int) -> dict:
                     session.delete(job)
                 session.delete(batch)
                 session.commit()
-                logging.debug(f"Task batch with ID {batch_id} has been approved and processed successfully.")
+
+                # we must also update our own cache of tasks from Google Tasks after creating/modifying/deleting tasks, 
+                # to ensure that the agent has the most up-to-date information when it queries the list of tasks
+                cache_google_tasks()
+
+                logging.info(f"Task batch with ID {batch_id} has been approved and processed successfully.")
                 return {"status": "approved"}
             else:
                 logging.error(f"Error processing task batch: {resp.get('error', 'Unknown error')}")
@@ -125,7 +255,7 @@ def approve_task(batch_id: int) -> dict:
         logging.error(f"Error approving task batch: {e}")
         return {"status": "error", "error": f"Error approving task batch: {e}"}
     
-def reject_task(batch_id: int) -> dict:
+def reject_batch(batch_id: int) -> dict:
     """If the user rejects a staged task, this function is called to remove the staged task from the database"""
     try:
         with Session(engine) as session:
@@ -148,31 +278,80 @@ def reject_task(batch_id: int) -> dict:
         logging.error(f"Error rejecting task batch: {e}")
         return {"status": "error", "error": f"Error rejecting task batch: {e}"}
     
-def get_pending_tasks() -> list[dict]:
-    """Returns a list of pending tasks that require user approval"""
+def get_pending_batches() -> list[dict]:
+    """
+    Returns a list of pending batches that require user approval
+    
+    {
+    "pending_batches": [
+        {
+            "batch_id": 1,
+            "tasks": [
+                {
+                    "task_id": 1,
+                    "title": "Task 1",
+                    "due_date": "2024-12-31T23:59:00.000Z",
+                    "description": "This is a test task.",
+                    "action": "create"
+                },
+                {
+                    "task_id": 2,
+                    "title": "Task 2",
+                    "due_date": null,
+                    "description": null,
+                    "action": "modify"
+                }
+            ]
+        },
+        ...
+    }
+    """
     try:
         with Session(engine) as session:
             pending_batches = session.exec(select(Batch).where(Batch.status == "pending")).all()
-            pending_tasks = []
+            pending_jobs = []
             for batch in pending_batches:
+                to_append = []
                 for job in batch.tasks:
                     task = session.exec(select(Task).where(Task.id == job.task_id)).first()
                     if task:
-                        pending_tasks.append({
-                            "batch_id": batch.id,
+                        to_append.append({
                             "task_id": task.id,
                             "title": task.title,
                             "due_date": task.due_date,
                             "description": task.description,
                             "action": job.action
                         })
-            return pending_tasks
+                pending_jobs.append({
+                    "batch_id": batch.id,
+                    "tasks": to_append
+                })
+            return pending_jobs
     except Exception as e:
-        logging.error(f"Error retrieving pending tasks: {e}")
-        return []
+        logging.error(f"Error retrieving pending batches: {e}")
+        return []               
 
-def google_tasks_handler(batch_id: int, jobs_data: list[tuple]) -> dict:    
-    """Creates multiple Google Tasks using the API with the given title, due date, and description"""
+def clear_pending_batches() -> dict:
+    """Utility function to clear all pending batches from the database. This can be used for testing purposes."""
+    try:
+        with Session(engine) as session:
+            pending_batches = session.exec(select(Batch).where(Batch.status == "pending")).all()
+            for batch in pending_batches:
+                for job in batch.tasks:
+                    task = session.exec(select(Task).where(Task.id == job.task_id)).first()
+                    if task:
+                        session.delete(task)
+                    session.delete(job)
+                session.delete(batch)
+            session.commit()
+            logging.debug("All pending batches have been cleared from the database.")
+            return {"status": "success", "message": "All pending batches have been cleared from the database."}
+    except Exception as e:
+        logging.error(f"Error clearing pending batches: {e}")
+        return {"status": "error", "error": f"Error clearing pending batches: {e}"}
+
+def google_tasks_handler(jobs_data: list[tuple]) -> dict:    
+    """Handles multiple Google Tasks edit jobs using the API with the given task info and actions (create/modify)"""
     creds = None
     # The file token.json stores the user's access and refresh tokens, and is
     # created automatically when the authorization flow completes for the first
@@ -187,11 +366,12 @@ def google_tasks_handler(batch_id: int, jobs_data: list[tuple]) -> dict:
         # we want to execute once all the tasks in the batch have been processed, so we can minimize the number of API calls!
         tasks = service.tasks()
 
-        batch = service.new_batch_http_request()
+        batch_req = service.new_batch_http_request()
 
         # Fetch fresh task data within this function's session
         with Session(engine) as session:
-            for job_id, task_id, action in jobs_data:
+            print(jobs_data)
+            for _, task_id, action in jobs_data:
                 task = session.exec(select(Task).where(Task.id == task_id)).first()
                 if not task:
                     logging.error(f"Task with ID {task_id} not found.")
@@ -199,7 +379,7 @@ def google_tasks_handler(batch_id: int, jobs_data: list[tuple]) -> dict:
                 
                 match action:
                     case "create":
-                        batch.add(
+                        batch_req.add(
                             tasks.insert(
                                 tasklist=TASKLIST_ID,
                                 body={
@@ -209,11 +389,25 @@ def google_tasks_handler(batch_id: int, jobs_data: list[tuple]) -> dict:
                                 }
                             )
                         )
-                        logging.debug(f"Task '{task.title}' created successfully in Google Tasks with due date {task.due_date}")
+                        logging.info(f"Task '{task.title}' created successfully in Google Tasks with due date {task.due_date}")
+                    case "update":
+                        batch_req.add(
+                            tasks.update(
+                                tasklist=TASKLIST_ID,
+                                task=task.id,
+                                body={
+                                    "title": task.title,
+                                    "notes": task.description if task.description else "",
+                                    "due": task.due_date
+                                }
+                            )
+                        )
+                        logging.info(f"Task '{task.title}' updated successfully in Google Tasks with due date {task.due_date}")
+                    # for now, we do not want to delete
                     case _:
                         logging.error(f"Unsupported job action: {action}")
         
-        batch.execute()
+        batch_req.execute()
         return {"status": "success"}
     except HttpError as err:
         logging.error(f"Error authenticating with Google API: {err}")

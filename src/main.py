@@ -7,7 +7,7 @@ import os
 import logging
 
 import tasks
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 # server dependencies
 from fastapi import FastAPI, HTTPException
@@ -18,10 +18,6 @@ class GenerateRequest(BaseModel):
 
 class BindRequest(BaseModel):
     file_path: str
-
-class ActionRequest(BaseModel):
-    task_id: str # keep this as is, we may want to move to this later
-    action: str  # "approve" or "deny"
 
 app = FastAPI(lifespan=filetracker.lifespan)
 
@@ -56,38 +52,60 @@ def bind(request: BindRequest):
 def status():
     return {"status": "healthy"}
 
-# we'll also make a general-purpose approve/deny endpoint for allowing/disallowing created tasks into Google Tasks
-@app.post("/action")
-def action(request: ActionRequest):
-    """Endpoint for handling approve/deny actions on created tasks"""
-    try:
-        if request.action == "approve":
-            tasks.approve_task(int(request.task_id))
-            return {"message": f"Task {request.task_id} approved and added to Google Tasks."}
-        elif request.action == "deny":
-            tasks.reject_task(int(request.task_id))
-            return {"message": f"Task {request.task_id} denied and will not be added to Google Tasks."}
-        else:
-            raise HTTPException(status_code=400, detail="Invalid action. Must be 'approve' or 'deny'.")
-    except Exception as e:
-        logging.error(f"Error processing action for task {request.task_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing action for task {request.task_id}: {e}")
+# we'll also make a general-purpose approve/deny endpoint for allowing/disallowing created "batch jobs" into Google Tasks
+@app.post("/action/{action}")
+def action(action: str, task_id: str | None = None):
+    """
+    Endpoint for handling approve/deny actions on created tasks
     
-# we should also be able to get a list of pending tasks for approval
+    Parameters:
+        - action: The action to perform, either "approve", "deny", or "clear"
+        - task_id: The ID of the task batch to approve or deny. Not required for "clear" action.
+    """
+    try:
+        resp = None
+        match action:
+            case "approve":
+                if(not task_id or not task_id.isdigit()):
+                    raise HTTPException(status_code=400, detail="Invalid task_id. Must be a numeric string.")
+                resp = tasks.approve_batch(int(task_id))
+            case "deny":
+                if(not task_id or not task_id.isdigit()):
+                    raise HTTPException(status_code=400, detail="Invalid task_id. Must be a numeric string.")
+                resp =  tasks.reject_batch(int(task_id))
+            case "clear":
+                logging.warning("Clearing all pending batches as per 'clear' action request. This will reject all pending batches.")
+                resp = tasks.clear_pending_batches()
+                if resp.get("error"):
+                    raise HTTPException(status_code=500, detail=resp["error"])
+                return {"message": "All pending batches have been cleared (rejected)."}
+            case _:
+                raise HTTPException(status_code=400, detail="Invalid action. Must be 'approve' or 'deny'.")
+        if(resp.get("error")):
+            raise HTTPException(status_code=500, detail=resp["error"])
+        return {"message": f"Action '{action}' has been processed for task batch {task_id}."}
+    except Exception as e:
+        logging.error(f"Error processing action for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error processing action for task {task_id}: {e}")
+    
+
 @app.get("/pending")
 def pending():
-    """Endpoint for retrieving a list of pending tasks that require user approval"""
+    """Endpoint for retrieving a list of pending batches that require user approval"""
     try:
-        pending = tasks.get_pending_tasks()
-        return {"pending_tasks": pending}
+        pending = tasks.get_pending_batches()
+        return {"pending_batches": pending}
     except Exception as e:
-        logging.error(f"Error retrieving pending tasks: {e}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving pending tasks: {e}")
+        logging.error(f"Error retrieving pending batches: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving pending batches: {e}")
 
 if __name__ == "__main__":
     # try to authenticate with the Google API to ensure credentials are set up correctly
     tasks.test_credentials()
     tasks.init_db()
+    tasks.cache_google_tasks()
+
+    print(tasks.get_tasks())
 
     if (os.getenv("DEV_SERVER", "False").lower() == "true"):
         logging.debug("Starting server in development mode with hot reload...")
