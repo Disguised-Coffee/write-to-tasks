@@ -6,7 +6,6 @@ where each job is a suggested task creation/modification that the user can appro
 the user approves a job, we can then call the add_task function to create/modify the task in Google Tasks.
 """
 import datetime
-import json
 import os
 import logging
 
@@ -26,17 +25,17 @@ TASKLIST_ID = os.getenv("TASKLIST_ID", "@default") # Use the default task list i
 
 # Pydantic version of our tasks for agent tool schema
 class TaskItem(BaseModel):
-    title: str
+    title: str | None # We'll have to make the title optional for the modify action, since Gemini might only suggest a modification to the due date or description without changing the title, and we don't want the agent to be forced to provide a title in that case
     due_date: str | None
     description: str | None
     google_task_id: str | None = None # This will store the ID of the task in Google Tasks once it's created, which can be useful for modifying existing tasks
 
 from typing import Optional
-from sqlmodel import Field, Session, SQLModel, create_engine, select, Relationship
+from sqlmodel import Field, Session, SQLModel, create_engine, select, Relationship, delete
 
 class Task(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    title: str
+    title: str | None
     due_date: Optional[str] = None
     description: Optional[str] = None
     google_task_id: Optional[str] = None # This will store the ID of the task in Google Tasks once it's created
@@ -80,7 +79,7 @@ def check_db():
     except Exception as e:
         logging.error(f"Database connection failed or Task table is not accessible: {e}")
 
-def cache_google_tasks() -> None:
+def cache_google_tasks(force : bool = False) -> None:
     """
     Utility function to cache the most recent list of tasks from Google Tasks in our database for quick retrieval
     
@@ -92,7 +91,7 @@ def cache_google_tasks() -> None:
     # and retrieve tasks from Google Tasks from that date onward.
     most_recent_check = config.get("most_recent_check", None)
     
-    if not most_recent_check:
+    if not most_recent_check or force:
         logging.info("Caching all tasks from Google Tasks to DB...")
     else:
         logging.info(f"Caching tasks from Google Tasks updated since {most_recent_check} to DB...")
@@ -103,7 +102,7 @@ def cache_google_tasks() -> None:
     try:
         service = build("tasks", "v1", credentials=creds)
         
-        if most_recent_check:
+        if most_recent_check and not force:
             results = service.tasks().list(tasklist=TASKLIST_ID, updatedMin=most_recent_check).execute()
         else:
             results = service.tasks().list(tasklist=TASKLIST_ID).execute()
@@ -111,8 +110,28 @@ def cache_google_tasks() -> None:
         if not items:
             logging.info("No tasks found in Google Tasks to cache.")
             return
+        
+        if force:
+            # deletes all cached tasks before re-caching to ensure that our cache is an exact mirror of the current state of Google Tasks
+            logging.warning("Force caching enabled. All existing cached tasks will be deleted and replaced with the current tasks from Google Tasks.")
+            with Session(engine) as session:
+                session.exec(delete(CachedGoogleTask))
+                session.commit()
+
         with Session(engine) as session:
+            # from here, there are two scenarios, if not force (otherwise do #1):
+            # 1) we are updating (google_task_id is found in our cache)
+            # 2) we are creating (google_task_id not found in our cache) and need to add new tasks to our cache.
             for item in items:
+                if(not force):
+                    cached_task = session.exec(select(CachedGoogleTask).where(CachedGoogleTask.google_id == item["id"])).first()
+                    if cached_task:
+                        # update the existing cached task with the new info from Google Tasks
+                        cached_task.title = item["title"]
+                        cached_task.due_date = item.get("due")
+                        cached_task.notes = item.get("notes")
+                        session.add(cached_task)
+                        continue
                 cached_task = CachedGoogleTask(
                     google_id=item["id"],
                     title=item["title"],
@@ -133,7 +152,7 @@ def cache_google_tasks() -> None:
     logging.info(f"Google Tasks caching complete. Most recent check date updated to {most_recent_check}!")
 
 
-def get_tasks() -> dict[str, list[TaskItem] | str]:
+def get_tasks() -> dict:
     """
         Utility function to get all tasks from Google Tasks
 
@@ -149,12 +168,12 @@ def get_tasks() -> dict[str, list[TaskItem] | str]:
     try:
         with Session(engine) as session:
             cached_tasks = session.exec(select(CachedGoogleTask)).all()
-            return {"status": "success", "cached": [TaskItem(title=task.title, due_date=task.due_date, description=task.notes) for task in cached_tasks]}
+            return {"status": "success", "cached": [{"task_id": task.google_id, "title": task.title, "due_date": task.due_date, "description": task.notes} for task in cached_tasks]}
     except Exception as e:
         logging.error(f"Error retrieving cached tasks from database: {e}")
         return {"status": "error", "cached": []}
 
-async def create_batch(task_items: list[TaskItem]) -> None:    
+async def create_batch(task_items: list[TaskItem], action: str) -> None:    
     """Interface to query a task to create into a database for user to approve before storing in Google Tasks"""
 
     # Looks like a mess
@@ -171,11 +190,32 @@ async def create_batch(task_items: list[TaskItem]) -> None:
                 logging.debug(f"Staging new task for approval: '{item.title}' due on {item.due_date}. Waiting for user approval...")
 
                 # create the tasks in the DB
-                task = Task(
-                    title=item.title,
-                    due_date=item.due_date,
-                    description=item.description
-                )
+                match action:
+                    case "create":
+                        task = Task(
+                            title=item.title,
+                            due_date=item.due_date,
+                            description=item.description
+                        )
+                    case "update":
+                        # for modify actions, we need the Google Task ID to know which task to modify,
+                        # we need to get the info that is missing from our taskitem from our cache
+
+                        cached_task = session.exec(select(CachedGoogleTask).where(CachedGoogleTask.google_id == item.google_task_id)).first()
+                        if not cached_task:
+                            logging.error(f"Cached task with Google ID {item.google_task_id} not found for modification. Skipping this task.")
+                            continue
+
+                        task = Task(
+                            title=(item.title if item.title is not None else cached_task.title),
+                            due_date=(item.due_date if item.due_date is not None else cached_task.due_date),
+                            description=(item.description if item.description is not None else cached_task.notes),
+                            google_task_id=item.google_task_id
+                        )
+                    case _:
+                        logging.error(f"Unsupported job action: {action}. Skipping this task.")
+                        continue
+                logging.info(task)
                 session.add(task)
                 session.flush() # flush to get the task ID for the job relationship
                 # create a job for this task with action "create"
@@ -184,7 +224,7 @@ async def create_batch(task_items: list[TaskItem]) -> None:
                     continue
                 job = Job(
                     task_id=task.id,
-                    action="create",
+                    action=action,
                     batch_id=batch.id
                 )
                 session.add(job)
@@ -375,7 +415,7 @@ def google_tasks_handler(jobs_data: list[tuple]) -> dict:
                             tasks.insert(
                                 tasklist=TASKLIST_ID,
                                 body={
-                                    "title": task.title,
+                                    "title": task.title if task.title else "", # Google Tasks API requires a title, so we'll use "' if the title is None
                                 "notes": task.description if task.description else "", # Add description as notes if provided
                                 "due": task.due_date # need to transform the due date into RFC3339 format if provided, e.g. "2024-12-31T23:59:00.000Z"
                                 }
@@ -383,14 +423,16 @@ def google_tasks_handler(jobs_data: list[tuple]) -> dict:
                         )
                         logging.info(f"Task '{task.title}' created successfully in Google Tasks with due date {task.due_date}")
                     case "update":
+                        logging.info(f"Modifying task with Google Task ID {task.google_task_id}, task: {task}...")
                         batch_req.add(
                             tasks.update(
                                 tasklist=TASKLIST_ID,
-                                task=task.id,
+                                task=task.google_task_id,
                                 body={
                                     "title": task.title,
                                     "notes": task.description if task.description else "",
-                                    "due": task.due_date
+                                    "due": task.due_date,
+                                    "id": task.google_task_id
                                 }
                             )
                         )

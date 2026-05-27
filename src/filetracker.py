@@ -78,13 +78,11 @@ class FileSaveHandler(FileSystemEventHandler):
         try:
 
             # Send a combined payload to generate_content
-            payload = f"{FILE_PROMPT}\n {modification_note}\n\nCurrent full file content:\n{string_content}"
-
-            logging.info(f"Sending content to FastAPI:\n{"*"*20}\n{payload}")
+            # payload = f"{FILE_PROMPT}\n {modification_note}\n\nCurrent full file content:\n{string_content}"
             
             # we'll call generate_content here to parse the conten
             notif.send_notif(title="File change detected!", message="Your changes have been detected and are being processed. Check logs for details.")
-            agent.generate_content(payload)
+            agent.generate_content({"modification_note": modification_note, "full_file_content": string_content})
 
         except Exception as e:
             logging.error(f"❌ Failed to sync: {e}")

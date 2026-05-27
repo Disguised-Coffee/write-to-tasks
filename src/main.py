@@ -33,7 +33,7 @@ def generate(request: GenerateRequest):
     creds = tasks.get_credentials()
     if creds is None:
         raise HTTPException(status_code=500, detail="Google API credentials not found. Please authenticate with the Google API before using this feature!")
-    resp = agent.generate_content(request.prompt)
+    resp = agent.generate_content({"prompt" : request.prompt})
     if("error" in resp):
         raise HTTPException(status_code=500, detail=resp["error"])
     return resp
@@ -116,6 +116,16 @@ def get_tasks():
     except Exception as e:
         logging.error(f"Error retrieving tasks: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving tasks: {e}")
+
+@app.get("/refresh")
+def refresh_tasks(force: bool = False):
+    """Endpoint for manually refreshing our cache of Google Tasks without needing to wait for the next scheduled refresh"""
+    try:
+        tasks.cache_google_tasks(force=force)
+        return {"message": "Tasks cache refresh has been queried!"}
+    except Exception as e:
+        logging.error(f"Error refreshing tasks cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Error refreshing tasks cache: {e}")
 
 if __name__ == "__main__":
     # try to authenticate with the Google API to ensure credentials are set up correctly
