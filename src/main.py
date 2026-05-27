@@ -142,7 +142,7 @@ def refresh_tasks(force: bool = False):
         logging.error(f"Error refreshing tasks cache: {e}")
         raise HTTPException(status_code=500, detail=f"Error refreshing tasks cache: {e}")
 
-if __name__ == "__main__":
+def main():
     # try to authenticate with the Google API to ensure credentials are set up correctly
     tasks.test_credentials()
     tasks.init_db()
@@ -157,3 +157,6 @@ if __name__ == "__main__":
         # Run the server with hot reload for development
         import uvicorn
         uvicorn.run("main:app", host="0.0.0.0", port=8000)
+
+if __name__ == "__main__":
+    main()

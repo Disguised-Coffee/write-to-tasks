@@ -17,3 +17,6 @@ https://www.asciiart.eu/text-to-ascii-art
  - Make a packaged version of write-to-tasks
  - Figure out next milestones and goals for this tool
  - Research Multi-modal methods and prompt engineering
+ - Create tests and workflow charts
+ - Create a request debounce with the same prompt
+ - Do more testing with debugger
