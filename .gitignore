@@ -1,6 +1,6 @@
 *.env
 */__pycache__/*
-todo.txt
 */assets/*
 user.config.json
 *.db
+.vscode/*

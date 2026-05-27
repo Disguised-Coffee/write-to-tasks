@@ -1,3 +1,16 @@
+"""
+Main point of entry for this application, responsible for initializing the server 
+and defining API endpoints for generating content, binding file paths, and managing tasks.
+
+Endpoints:
+- GET /: Basic endpoint to verify the server is running.
+- POST /generate: Accepts a prompt and returns generated content based on that prompt.
+- POST /bind: Accepts a file path to track for changes.
+- GET /status: Health check endpoint to verify the server is healthy.
+- POST /action/{action}: Endpoint for handling approve/deny actions on created tasks.
+- GET /pending: Endpoint for retrieving a list of pending batches that require user approval.
+"""
+
 import logging
 logging.basicConfig(level=logging.INFO)
 
@@ -6,30 +19,31 @@ config.load_user_config()
 
 import agent
 import filetracker
+import tasks
+
 import dotenv
 dotenv.load_dotenv()
 import os
 
-import tasks
-
 # server dependencies
-from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-
 class GenerateRequest(BaseModel):
     prompt: str
-
 class BindRequest(BaseModel):
+    """Request body for binding a file path to track. Will be overhauled later."""
     file_path: str
 
+from fastapi import FastAPI, HTTPException
 app = FastAPI(lifespan=filetracker.lifespan)
 
 @app.get("/")
 def root():
+    """Basic endpoint to verify the server is running."""
     return "This is the Write to Tasks API. Use the /generate endpoint to generate content."
 
 @app.post("/generate")
 def generate(request: GenerateRequest):
+    """Endpoint for generating content based on a user prompt. This is currently used for generating Google Tasks API calls based on user modifications to their file, but it can be used for other things in the future as well."""
     creds = tasks.get_credentials()
     if creds is None:
         raise HTTPException(status_code=500, detail="Google API credentials not found. Please authenticate with the Google API before using this feature!")
@@ -40,7 +54,7 @@ def generate(request: GenerateRequest):
 
 @app.post("/bind")
 def bind(request: BindRequest):
-    """Sets file path to track"""
+    """Sets file path to track. Maybe be replaced with a more general "config" endpoint in the future if we want to allow users to set other configuration variables through the API as well."""
     try:
         resp = filetracker.set_file_to_tracked(request.file_path)
         if resp:
@@ -53,6 +67,7 @@ def bind(request: BindRequest):
 
 @app.get("/status")
 def status():
+    """Health check endpoint to verify the server is healthy."""
     return {"status": "healthy"}
 
 # we'll also make a general-purpose approve/deny endpoint for allowing/disallowing created "batch jobs" into Google Tasks

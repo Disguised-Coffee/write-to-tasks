@@ -1,6 +1,5 @@
 import os
 import dotenv
-from pydantic import BaseModel
 dotenv.load_dotenv()
 import logging
 import asyncio
@@ -66,7 +65,6 @@ TASK_IDS = [] # for ensuring response from Gemini contains correct task IDs afte
 def generate_content(stimulus:dict) -> dict:
     """Generate content using the Gemini API based on the provided prompt
 
-    
     Args:
         - stimulus (dict): A dictionary containing the following keys under 2 scenarios:
             1): When generating content based on a user's prompt from the frontend:
@@ -76,9 +74,6 @@ def generate_content(stimulus:dict) -> dict:
                 - modification_note (str): A note describing the specific changes detected in the user's local todo
         
     """
-    
-    
-
     
     # get current Google tasks, and record IDs for checking later
     get_tasks_response = get_tasks()
@@ -144,7 +139,10 @@ def generate_content(stimulus:dict) -> dict:
     #         "google_task_id": "Z0J5dU9mbUxGZXQ1R3ZBaw"
     #     },
     # ]
-    # update_google_tasks([TaskItem(**item) for item in tasks_data])
+    #
+    # create_google_tasks([TaskItem(**item) for item in tasks_data]) # Create a new task in Google Tasks based on the generated content from Gemini
+    # update_google_tasks([TaskItem(**item) for item in tasks_data]) # Update the task in Google Tasks based on the generated content from Gemini (make sure to include the correct google_task_id for updates!)
+    #
     # return {"message": "Content generated successfully (mock response)"}
 
 
