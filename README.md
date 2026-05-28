@@ -21,8 +21,8 @@ This tool is ideal for anyone looking to streamline their task management proces
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/googleapis/google-tasks-api.git
-    cd google-tasks-api
+   git clone https://github.com/Disguised-Coffee/write-to-tasks.git
+   cd write-to-tasks
     ```
 
 2. Create a virtual environment and activate it:
