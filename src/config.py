@@ -10,7 +10,7 @@ dotenv.load_dotenv()
 USER_CONFIG = {}
 
 DEFAULT_CONFIG = {
-    "file_to_check": None,  # the file path that the file tracker will watch for changes
+    "file_to_check": "todo.txt",  # the file path that the file tracker will watch for changes
     "most_recent_check": None,  # timestamp of the most recent file check, used to prevent duplicate checks in quick succession
     "google_api_token": None,  # the API token for the agent to use when making calls to the Google Tasks API
     "tasklist_id": "@default",  # the ID of the Google Tasks tasklist to add tasks to
