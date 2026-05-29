@@ -364,6 +364,10 @@
 
     <script>
         const API_BASE = '';
+        
+        // Track which fields have been modified by the user
+        let modifiedFields = new Set();
+        let loadedSettings = {};
 
         // Status message helper
         function showStatus(elementId, message, type = 'info') {
@@ -375,6 +379,14 @@
             }, 4000);
         }
 
+        // Attach change listeners to track modifications
+        function attachChangeListeners() {
+            document.getElementById('fileToCheck').addEventListener('input', () => modifiedFields.add('fileToCheck'));
+            document.getElementById('taskListId').addEventListener('input', () => modifiedFields.add('taskListId'));
+            document.getElementById('apiKey').addEventListener('input', () => modifiedFields.add('apiKey'));
+            document.getElementById('disableFileMonitoring').addEventListener('change', () => modifiedFields.add('disableFileMonitoring'));
+        }
+
         // Load settings on page load
         function loadSettings() {
             fetch(`${API_BASE}/config`)
@@ -384,23 +396,51 @@
                     document.getElementById('taskListId').value = data.tasklist_id || '@default';
                     document.getElementById('apiKey').value = data.google_api_token ? '••••••••' : '';
                     document.getElementById('disableFileMonitoring').checked = !data.file_tracker_set;
+                    
+                    // Store loaded state for comparison
+                    loadedSettings = {
+                        fileToCheck: document.getElementById('fileToCheck').value,
+                        taskListId: document.getElementById('taskListId').value,
+                        apiKey: document.getElementById('apiKey').value,
+                        disableFileMonitoring: document.getElementById('disableFileMonitoring').checked
+                    };
+                    
+                    // Clear modification tracking after loading
+                    modifiedFields.clear();
+                    attachChangeListeners();
                 })
                 .catch(err => console.error('Error loading settings:', err));
         }
 
-        // Save settings
+        // Save settings - only send fields that were modified
         function saveSettings() {
             const fileToCheck = document.getElementById('fileToCheck').value.trim();
             const taskListId = document.getElementById('taskListId').value.trim() || '@default';
             const apiKey = document.getElementById('apiKey').value.trim();
             const disableFileMonitoring = document.getElementById('disableFileMonitoring').checked;
 
-            const payload = {
-                file_to_check: fileToCheck || null,
-                tasklist_id: taskListId,
-                google_api_token: apiKey || null,
-                file_tracker_enabled: !disableFileMonitoring
-            };
+            const payload = {};
+            
+            // Only include fields that were actually modified by the user
+            if (modifiedFields.has('fileToCheck')) {
+                payload.file_to_check = fileToCheck || null;
+            }
+            if (modifiedFields.has('taskListId')) {
+                payload.tasklist_id = taskListId;
+            }
+            // For API key: only send if modified AND it's not the masked placeholder
+            if (modifiedFields.has('apiKey') && apiKey !== '••••••••' && apiKey !== '') {
+                payload.google_api_token = apiKey;
+            }
+            if (modifiedFields.has('disableFileMonitoring')) {
+                payload.file_tracker_enabled = !disableFileMonitoring;
+            }
+            
+            // If nothing was modified, show message
+            if (Object.keys(payload).length === 0) {
+                showStatus('settingsStatus', 'No changes to save', 'info');
+                return;
+            }
 
             fetch(`${API_BASE}/config`, {
                 method: 'POST',

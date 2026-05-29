@@ -34,11 +34,11 @@ class BindRequest(BaseModel):
     file_path: str
 
 class ConfigRequest(BaseModel):
-    """Request body for updating configuration settings."""
+    """Request body for updating configuration settings - all fields are optional to support partial updates."""
     file_to_check: str | None = None
-    tasklist_id: str = "@default"
+    tasklist_id: str | None = None
     google_api_token: str | None = None
-    file_tracker_enabled: bool = True
+    file_tracker_enabled: bool | None = None
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -63,47 +63,52 @@ def get_config():
         "file_to_check": config.get("file_to_check", None),
         "tasklist_id": config.get("tasklist_id", "@default"),
         "file_tracker_set": config.get("file_tracker_set", False),
-        "google_api_token": config.get("google_api_token", None),
+        "google_api_token": config.get("google_api_token", None) is not None,
     }
 
 @app.post("/config")
 def update_config(request: ConfigRequest):
-    """Update configuration settings"""
+    """Update configuration settings - only updates fields that are provided in the request"""
     try:
-        file_to_check = request.file_to_check
-        tasklist_id = request.tasklist_id or "@default"
-        google_api_token = request.google_api_token
-        file_tracker_enabled = request.file_tracker_enabled
+        # Update API token only if provided
+        if request.google_api_token is not None:
+            config.set("google_api_token", request.google_api_token)
         
-        # Update API token if provided
-        if google_api_token:
-            config.set("google_api_token", google_api_token)
+        # Update tasklist ID only if provided
+        if request.tasklist_id is not None:
+            config.set("tasklist_id", request.tasklist_id)
         
-        # Update tasklist ID
-        config.set("tasklist_id", tasklist_id)
-        
-        # Handle file tracker settings
-        if file_tracker_enabled:
-            # Only set file tracker if a file path is provided
-            if file_to_check:
-                config.set("file_to_check", file_to_check)
-                resp = filetracker.set_file_to_tracked(file_to_check)
-                if not resp:
-                    return {"error": f"Failed to set file to track: {file_to_check}. Check logs for details."}
-                config.set("file_tracker_set", True)
+        # Handle file tracker settings only if explicitly provided
+        if request.file_tracker_enabled is not None:
+            if request.file_tracker_enabled:
+                # Only set file tracker if a file path is provided or already exists
+                file_to_check = request.file_to_check if request.file_to_check is not None else config.get("file_to_check")
+                if file_to_check:
+                    config.set("file_to_check", file_to_check)
+                    resp = filetracker.set_file_to_tracked(file_to_check)
+                    if not resp:
+                        return {"error": f"Failed to set file to track: {file_to_check}. Check logs for details."}
+                    config.set("file_tracker_set", True)
+                else:
+                    return {"error": "File path is required when enabling file monitoring."}
             else:
-                return {"error": "File path is required when enabling file monitoring."}
-        else:
-            # Disable file tracking
-            config.set("file_tracker_set", False)
-            if file_to_check:
-                config.set("file_to_check", file_to_check)
+                # Disable file tracking
+                config.set("file_tracker_set", False)
+        
+        # Update file path if provided (independent of file tracker state)
+        if request.file_to_check is not None:
+            config.set("file_to_check", request.file_to_check)
+            # Only attempt to track if file monitoring is enabled or being enabled
+            if config.get("file_tracker_set", False) or request.file_tracker_enabled:
+                resp = filetracker.set_file_to_tracked(request.file_to_check)
+                if not resp:
+                    return {"error": f"Failed to set file to track: {request.file_to_check}. Check logs for details."}
         
         return {
             "message": "Configuration updated successfully",
             "file_to_check": config.get("file_to_check"),
-            "tasklist_id": config.get("tasklist_id"),
-            "file_tracker_set": config.get("file_tracker_set"),
+            "tasklist_id": config.get("tasklist_id", "@default"),
+            "file_tracker_set": config.get("file_tracker_set", False),
             "google_api_token": "***" if config.get("google_api_token") else None
         }
     except Exception as e:
