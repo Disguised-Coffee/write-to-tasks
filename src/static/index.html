@@ -249,6 +249,48 @@
             animation: spin 1s linear infinite;
         }
 
+        .batch-processing {
+            position: relative;
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .batch-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.7);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+
+        .overlay-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .overlay-spinner {
+            width: 32px;
+            height: 32px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        .overlay-text {
+            font-weight: 600;
+            color: #667eea;
+            font-size: 0.9em;
+        }
+
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -304,9 +346,11 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="taskListId">Google Tasks List ID</label>
-                    <input type="text" id="taskListId" placeholder="@default" value="@default">
-                    <small style="color: #999; margin-top: 4px; display: block;">Task list to add new tasks to (default: @default)</small>
+                    <label for="taskListId">Google Tasks List</label>
+                    <select id="taskListId">
+                        <option value="@default">Loading task lists...</option>
+                    </select>
+                    <small style="color: #999; margin-top: 4px; display: block;">Select which task list to add new tasks to</small>
                 </div>
 
                 <div class="form-group">
@@ -355,7 +399,7 @@
                 <h2>⏳ Pending Approval</h2>
                 <div class="button-group" style="margin-bottom: 20px;">
                     <button class="refresh-button secondary" onclick="refreshPending()">🔄 Refresh</button>
-                    <button class="refresh-button danger" onclick="clearAllPending()">Clear All</button>
+                    <button class="refresh-button danger" id="clearAllBtn" onclick="clearAllPending(this)">Clear All</button>
                 </div>
                 <div id="pendingList"></div>
             </div>
@@ -368,6 +412,8 @@
         // Track which fields have been modified by the user
         let modifiedFields = new Set();
         let loadedSettings = {};
+        // Track which batches are currently being processed
+        let processingBatches = new Set();
 
         // Status message helper
         function showStatus(elementId, message, type = 'info') {
@@ -379,12 +425,75 @@
             }, 4000);
         }
 
+        // Show processing overlay on batch item
+        function showBatchProcessing(batchId) {
+            const batchElement = document.getElementById(`batch-${batchId}`);
+            if (batchElement) {
+                batchElement.classList.add('batch-processing');
+                batchElement.style.position = 'relative';
+                const overlay = document.createElement('div');
+                overlay.className = 'batch-overlay';
+                overlay.innerHTML = `
+                    <div class="overlay-content">
+                        <div class="overlay-spinner"></div>
+                        <div class="overlay-text">Processing...</div>
+                    </div>
+                `;
+                batchElement.appendChild(overlay);
+            }
+        }
+
+        // Hide processing overlay on batch item
+        function hideBatchProcessing(batchId) {
+            const batchElement = document.getElementById(`batch-${batchId}`);
+            if (batchElement) {
+                batchElement.classList.remove('batch-processing');
+                const overlay = batchElement.querySelector('.batch-overlay');
+                if (overlay) {
+                    overlay.remove();
+                }
+            }
+        }
+
         // Attach change listeners to track modifications
         function attachChangeListeners() {
             document.getElementById('fileToCheck').addEventListener('input', () => modifiedFields.add('fileToCheck'));
-            document.getElementById('taskListId').addEventListener('input', () => modifiedFields.add('taskListId'));
+            document.getElementById('taskListId').addEventListener('change', () => modifiedFields.add('taskListId'));
             document.getElementById('apiKey').addEventListener('input', () => modifiedFields.add('apiKey'));
             document.getElementById('disableFileMonitoring').addEventListener('change', () => modifiedFields.add('disableFileMonitoring'));
+        }
+
+        // Load task lists from the API
+        function loadTaskLists() {
+            fetch(`${API_BASE}/get_tasklists`)
+                .then(r => r.json())
+                .then(data => {
+                    const select = document.getElementById('taskListId');
+                    const taskLists = data.task_lists || [];
+                    
+                    if (taskLists.length === 0) {
+                        select.innerHTML = '<option value="@default">@default (System default)</option>';
+                    } else {
+                        select.innerHTML = taskLists.map(list => 
+                            `<option value="${list.id}">${list.title || list.id}</option>`
+                        ).join('');
+                        
+                        // Add system default option at the beginning
+                        const defaultOption = document.createElement('option');
+                        defaultOption.value = '@default';
+                        defaultOption.textContent = '@default (System default)';
+                        select.insertBefore(defaultOption, select.firstChild);
+                    }
+                    
+                    // Set the selected value to the currently configured tasklist_id
+                    const currentTaskListId = loadedSettings.taskListId || '@default';
+                    select.value = currentTaskListId;
+                })
+                .catch(err => {
+                    console.error('Error loading task lists:', err);
+                    const select = document.getElementById('taskListId');
+                    select.innerHTML = '<option value="@default">@default (System default)</option>';
+                });
         }
 
         // Load settings on page load
@@ -392,18 +501,23 @@
             fetch(`${API_BASE}/config`)
                 .then(r => r.json())
                 .then(data => {
+                    console.log(data)
                     document.getElementById('fileToCheck').value = data.file_to_check || '';
-                    document.getElementById('taskListId').value = data.tasklist_id || '@default';
+                    // document.getElementById('taskListId').value = data.tasklist_id || '@default';
+                    // Show masked dots if API token is set, empty otherwise
                     document.getElementById('apiKey').value = data.google_api_token ? '••••••••' : '';
                     document.getElementById('disableFileMonitoring').checked = !data.file_tracker_set;
                     
                     // Store loaded state for comparison
                     loadedSettings = {
-                        fileToCheck: document.getElementById('fileToCheck').value,
-                        taskListId: document.getElementById('taskListId').value,
-                        apiKey: document.getElementById('apiKey').value,
-                        disableFileMonitoring: document.getElementById('disableFileMonitoring').checked
+                        fileToCheck: data.file_to_check,
+                        taskListId: data.tasklist_id,
+                        apiKey: data.google_api_token,
+                        disableFileMonitoring: data.file_tracker_set
                     };
+                    
+                    // Load available task lists
+                    loadTaskLists();
                     
                     // Clear modification tracking after loading
                     modifiedFields.clear();
@@ -537,19 +651,40 @@
                     if (!batches.length) {
                         list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">✨</div><p>No pending approvals</p></div>';
                     } else {
-                        list.innerHTML = batches.map((batch, idx) => `
-                            <div class="list-item">
-                                <div class="list-item-title">
-                                    <span class="badge pending">ID: ${batch.id}</span>
-                                    ${batch.description || 'Task Batch'}
+                        list.innerHTML = batches.map((batch, idx) => {
+                            // Handle both array and object formats for tasks
+                            let tasks = [];
+                            if (batch.tasks && Array.isArray(batch.tasks)) {
+                                tasks = batch.tasks;
+                            } else if (batch.task_data && Array.isArray(batch.task_data)) {
+                                tasks = batch.task_data;
+                            }
+                            
+                            const tasksSummary = tasks.length > 0 
+                                ? `<div style="margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 4px;">
+                                    <strong>${tasks.length} task${tasks.length !== 1 ? 's' : ''}</strong>
+                                    ${tasks.map((task, i) => `
+                                        <div style="margin-top: 6px; padding-top: 6px; border-top: 1px solid #ddd;">
+                                            <div style="font-weight: 500; color: #333;">${task.title || 'Untitled Task'}</div>
+                                            ${task.notes ? `<div style="color: #666; font-size: 0.9em; margin-top: 2px;">${task.notes}</div>` : ''}
+                                        </div>
+                                    `).join('')}
+                                  </div>`
+                                : '<div style="margin-top: 10px; color: #999; font-style: italic;">No tasks in this batch</div>';
+                            
+                            return `
+                                <div class="list-item" id="batch-${batch.batch_id}" style="margin-bottom: 15px;">
+                                    <div class="list-item-title">
+                                        <span class="badge pending">Batch ID: ${batch.batch_id}</span>
+                                    </div>
+                                    ${tasksSummary}
+                                    <div class="button-group" style="margin-top: 12px;">
+                                        <button class="success" style="flex: 1;" onclick="approveBatch(${batch.batch_id})">✓ Approve</button>
+                                        <button class="danger" style="flex: 1;" onclick="denyBatch(${batch.batch_id})">✕ Deny</button>
+                                    </div>
                                 </div>
-                                <div class="list-item-desc">${batch.details || 'No details provided'}</div>
-                                <div class="button-group" style="margin-top: 12px;">
-                                    <button class="success" style="flex: 1;" onclick="approveBatch(${batch.id})">Approve</button>
-                                    <button class="danger" style="flex: 1;" onclick="denyBatch(${batch.id})">Deny</button>
-                                </div>
-                            </div>
-                        `).join('');
+                            `;
+                        }).join('');
                     }
                 })
                 .catch(err => {
@@ -559,37 +694,76 @@
 
         // Approve batch
         function approveBatch(batchId) {
+            // Prevent multiple requests on the same batch
+            if (processingBatches.has(batchId)) {
+                return;
+            }
+            
+            processingBatches.add(batchId);
+            showBatchProcessing(batchId);
+            
             fetch(`${API_BASE}/action/approve?task_id=${batchId}`, { method: 'POST' })
                 .then(r => r.json())
                 .then(data => {
+                    hideBatchProcessing(batchId);
+                    processingBatches.delete(batchId);
                     showStatus('settingsStatus', `Batch ${batchId} approved!`, 'success');
                     refreshPending();
                     refreshTasks();
                 })
-                .catch(err => showStatus('settingsStatus', `Error approving batch: ${err.message}`, 'error'));
+                .catch(err => {
+                    hideBatchProcessing(batchId);
+                    processingBatches.delete(batchId);
+                    showStatus('settingsStatus', `Error approving batch: ${err.message}`, 'error');
+                });
         }
 
         // Deny batch
         function denyBatch(batchId) {
+            // Prevent multiple requests on the same batch
+            if (processingBatches.has(batchId)) {
+                return;
+            }
+            
+            processingBatches.add(batchId);
+            showBatchProcessing(batchId);
+            
             fetch(`${API_BASE}/action/deny?task_id=${batchId}`, { method: 'POST' })
                 .then(r => r.json())
                 .then(data => {
+                    hideBatchProcessing(batchId);
+                    processingBatches.delete(batchId);
                     showStatus('settingsStatus', `Batch ${batchId} denied!`, 'success');
                     refreshPending();
                 })
-                .catch(err => showStatus('settingsStatus', `Error denying batch: ${err.message}`, 'error'));
+                .catch(err => {
+                    hideBatchProcessing(batchId);
+                    processingBatches.delete(batchId);
+                    showStatus('settingsStatus', `Error denying batch: ${err.message}`, 'error');
+                });
         }
 
         // Clear all pending
-        function clearAllPending() {
+        function clearAllPending(btn) {
             if (confirm('Are you sure you want to clear all pending batches? This cannot be undone.')) {
+                // Disable the button during processing
+                btn.disabled = true;
+                const originalText = btn.textContent;
+                btn.innerHTML = '<span class="loading"></span> Clearing...';
+                
                 fetch(`${API_BASE}/action/clear`, { method: 'POST' })
                     .then(r => r.json())
                     .then(data => {
+                        btn.disabled = false;
+                        btn.textContent = originalText;
                         showStatus('settingsStatus', 'All pending batches cleared!', 'success');
                         refreshPending();
                     })
-                    .catch(err => showStatus('settingsStatus', `Error clearing batches: ${err.message}`, 'error'));
+                    .catch(err => {
+                        btn.disabled = false;
+                        btn.textContent = originalText;
+                        showStatus('settingsStatus', `Error clearing batches: ${err.message}`, 'error');
+                    });
             }
         }
 

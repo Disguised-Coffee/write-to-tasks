@@ -447,8 +447,22 @@ def google_tasks_handler(jobs_data: list[tuple]) -> dict:
         logging.error(f"Error authenticating with Google API: {err}")
         return {"status": "error", "error": "Error creating task: Possibly an authentication issue with the Google API."}
 
-
-
+def get_task_lists() -> list[dict]:
+    """Utility function to get the list of task lists from Google Tasks, which can be useful for allowing the user to specify which task list they want to use for this tool if they have multiple task lists in their Google Tasks account"""
+    creds = get_credentials()
+    if not creds:
+        logging.error("Google API credentials not found. Please authenticate with the Google API before using this tool.")
+        return []
+    try:
+        service = build("tasks", "v1", credentials=creds)
+        results = service.tasklists().list().execute()
+        items = results.get("items", [])
+        task_lists = [{"id": item["id"], "title": item["title"]} for item in items]
+        logging.debug(f"Retrieved {len(task_lists)} task lists from Google Tasks.")
+        return task_lists
+    except HttpError as err:
+        logging.error(f"Error authenticating with Google API: {err}")
+        return []
 
 def test_credentials():
     """Test Google API credentials by attempting to access the specified task list"""

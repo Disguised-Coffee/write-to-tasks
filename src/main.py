@@ -218,6 +218,16 @@ def refresh_tasks(force: bool = False):
         logging.error(f"Error refreshing tasks cache: {e}")
         raise HTTPException(status_code=500, detail=f"Error refreshing tasks cache: {e}")
 
+@app.get("/get_tasklists")
+def get_tasklists():
+    """Endpoint for retrieving the list of task lists from Google Tasks"""
+    try:
+        task_lists = tasks.get_task_lists()
+        return {"task_lists": task_lists}
+    except Exception as e:
+        logging.error(f"Error retrieving task lists: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving task lists: {e}")
+
 def main():
     # try to authenticate with the Google API to ensure credentials are set up correctly
     tasks.test_credentials()
