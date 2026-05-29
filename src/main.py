@@ -12,18 +12,17 @@ Endpoints:
 """
 
 import logging
-logging.basicConfig(level=logging.INFO)
 
 import config
+if(config.IS_DEV):
+    logging.basicConfig(level=logging.INFO)
+    logging.debug("Running in development mode with verbose logging enabled.")
+
 config.load_user_config()
 
 import agent
 import filetracker
 import tasks
-
-import dotenv
-dotenv.load_dotenv()
-import os
 
 # server dependencies
 from pydantic import BaseModel
@@ -148,7 +147,7 @@ def main():
     tasks.init_db()
     tasks.cache_google_tasks()
 
-    if (os.getenv("DEV_SERVER", "False").lower() == "true"):
+    if(config.IS_DEV):
         logging.debug("Starting server in development mode with hot reload...")
         import uvicorn
         uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

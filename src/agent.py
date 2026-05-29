@@ -1,9 +1,11 @@
 import os
-import dotenv
-dotenv.load_dotenv()
+
 import logging
 import asyncio
 
+import config
+
+import notif
 from tasks import TaskItem, create_batch, get_tasks
 
 SYSTEM_INSTRUCTION = """You are an expert Task Synchronization Agent. Your role is to analyze a user's local todo text file changes and reconcile them against their live Google Tasks data. 
@@ -50,9 +52,18 @@ Cross-reference the prompt against the live Google Tasks context.
 - If no actionable changes are required, explain that everything is up to date."""
 
 # Gemini API key setup
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", None)
+GOOGLE_API_KEY = config.get("google_api_token", None)
 if GOOGLE_API_KEY is None:
-    raise ValueError("GOOGLE_API_KEY environment variable is not set")
+    notif.send_error_notif(
+        title="Configuration Error: Missing API Key",
+        message="Google API token not found in configuration. Please set your Google Gemini API token before generating content.",
+        # on click, we should open our web interface where the user can input their API key into the configuration page
+        #  []
+        on_click_callback=lambda: ()
+    )
+    logging.error("GOOGLE_API_KEY environment variable is not set. Please set it to your Google API key to enable task synchronization!")
+
+    # raise ValueError("GOOGLE_API_KEY environment variable is not set!")
 
 from google import genai
 from google.genai import types
@@ -74,6 +85,10 @@ def generate_content(stimulus:dict) -> dict:
                 - modification_note (str): A note describing the specific changes detected in the user's local todo
         
     """
+    # check api key before generating content
+    if config.get("google_api_token", None) is None:
+        logging.error("Google API token not found in configuration. Cannot generate content without API token.")
+        return {"error": "Google API token not found in configuration. Please set your Google Gemini API token before generating content."}
     
     # get current Google tasks, and record IDs for checking later
     get_tasks_response = get_tasks()

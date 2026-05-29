@@ -21,7 +21,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 # Google Tasks API client setup
 SCOPES = ["https://www.googleapis.com/auth/tasks"] # Scope for write access to Google Tasks
-TASKLIST_ID = os.getenv("TASKLIST_ID", "@default") # Use the default task list if not specified
+TASKLIST_ID = config.get("tasklist_id", "@default") # The ID of the task list to add tasks to, which should be set in the user.config.json file
 
 # Pydantic version of our tasks for agent tool schema
 class TaskItem(BaseModel):

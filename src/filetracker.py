@@ -8,7 +8,6 @@ from watchdog.events import FileSystemEventHandler
 import agent
 
 import notif
-import asyncio
 
 FILE_PROMPT = """Create or update Google Tasks based on the following user modifications to their file. Only respond with the Google Tasks API calls needed to reflect the following changes the user made in the file:"""
 
@@ -98,8 +97,7 @@ class FileSaveHandler(FileSystemEventHandler):
 import config
 CONFIG_FILE = config.get("file_to_check", None)
 if not CONFIG_FILE:
-    logging.warning("No file to track specified in configuration. Please set 'config_file' in user.config.json to the file you want to track for changes.")
-    exit(1)
+    logging.warning("No file to track specified in configuration. Please set 'file_to_check' to the file you want to track for changes.")
 
 handler = FileSaveHandler(file_path=CONFIG_FILE)
 
@@ -117,23 +115,27 @@ async def lifespan(app: FastAPI):
         app = FastAPI(lifespan=lifespan)
     """
     # --- BEFORE SERVER STARTS ---
-    logging.info("🎬 Starting up file watcher thread...")
-    
-    observer = Observer()
-    observer.schedule(handler, path=".", recursive=False)
-    
-    # Spin up the background thread. Because FastAPI keeps running,
-    # we DO NOT call observer.join() here, otherwise the server would freeze up!
-    observer.start() 
-    
-    # The yield splits startup from shutdown
-    yield 
-    
-    # --- BEFORE SERVER SHUTS DOWN ---
-    logging.info("🛑 Shutting down file watcher thread safely...")
-    observer.stop()
-    
-    # NOW we call join() because we want to block FastAPI from fully closing 
-    # until our background thread has finished cleaning up its OS hooks.
-    observer.join() 
-    logging.info("✨ File watcher stopped. Goodbye!")
+    if(config.get("file_tracker_set", False)):
+        logging.info("🎬 Starting up file watcher thread...")
+        
+        observer = Observer()
+        observer.schedule(handler, path=".", recursive=False)
+        
+        # Spin up the background thread. Because FastAPI keeps running,
+        # we DO NOT call observer.join() here, otherwise the server would freeze up!
+        observer.start() 
+        
+        # The yield splits startup from shutdown
+        yield 
+        
+        # --- BEFORE SERVER SHUTS DOWN ---
+        logging.info("🛑 Shutting down file watcher thread safely...")
+        observer.stop()
+        
+        # NOW we call join() because we want to block FastAPI from fully closing 
+        # until our background thread has finished cleaning up its OS hooks.
+        observer.join() 
+        logging.info("✨ File watcher stopped. Goodbye!")
+    else:
+        logging.info("!! File tracker is not set to track any file. File watcher thread will not start. Please set 'file_to_check' in the configuration to the file you want to track for changes before starting the server.")
+        yield
