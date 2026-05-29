@@ -28,17 +28,87 @@ import tasks
 from pydantic import BaseModel
 class GenerateRequest(BaseModel):
     prompt: str
+
 class BindRequest(BaseModel):
     """Request body for binding a file path to track. Will be overhauled later."""
     file_path: str
 
+class ConfigRequest(BaseModel):
+    """Request body for updating configuration settings."""
+    file_to_check: str | None = None
+    tasklist_id: str = "@default"
+    google_api_token: str | None = None
+    file_tracker_enabled: bool = True
+
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
 app = FastAPI(lifespan=filetracker.lifespan)
+
+# Mount static files
+static_path = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_path):
+    app.mount("/static", StaticFiles(directory=static_path), name="static")
 
 @app.get("/")
 def root():
-    """Basic endpoint to verify the server is running."""
-    return "This is the Write to Tasks API. Use the /generate endpoint to generate content."
+    """Serve the web interface"""
+    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"), media_type="text/html")
+
+@app.get("/config")
+def get_config():
+    """Get the current configuration"""
+    return {
+        "file_to_check": config.get("file_to_check", None),
+        "tasklist_id": config.get("tasklist_id", "@default"),
+        "file_tracker_set": config.get("file_tracker_set", False),
+        "google_api_token": config.get("google_api_token", None),
+    }
+
+@app.post("/config")
+def update_config(request: ConfigRequest):
+    """Update configuration settings"""
+    try:
+        file_to_check = request.file_to_check
+        tasklist_id = request.tasklist_id or "@default"
+        google_api_token = request.google_api_token
+        file_tracker_enabled = request.file_tracker_enabled
+        
+        # Update API token if provided
+        if google_api_token:
+            config.set("google_api_token", google_api_token)
+        
+        # Update tasklist ID
+        config.set("tasklist_id", tasklist_id)
+        
+        # Handle file tracker settings
+        if file_tracker_enabled:
+            # Only set file tracker if a file path is provided
+            if file_to_check:
+                config.set("file_to_check", file_to_check)
+                resp = filetracker.set_file_to_tracked(file_to_check)
+                if not resp:
+                    return {"error": f"Failed to set file to track: {file_to_check}. Check logs for details."}
+                config.set("file_tracker_set", True)
+            else:
+                return {"error": "File path is required when enabling file monitoring."}
+        else:
+            # Disable file tracking
+            config.set("file_tracker_set", False)
+            if file_to_check:
+                config.set("file_to_check", file_to_check)
+        
+        return {
+            "message": "Configuration updated successfully",
+            "file_to_check": config.get("file_to_check"),
+            "tasklist_id": config.get("tasklist_id"),
+            "file_tracker_set": config.get("file_tracker_set"),
+            "google_api_token": "***" if config.get("google_api_token") else None
+        }
+    except Exception as e:
+        logging.error(f"Error updating config: {e}")
+        return {"error": f"Error updating config: {e}"}
 
 @app.post("/generate")
 def generate(request: GenerateRequest):
@@ -78,35 +148,37 @@ def action(action: str, task_id: str | None = None):
     Parameters:
         - action: The action to perform, either "approve", "deny", or "clear"
         - task_id: The ID of the task batch to approve or deny. Not required for "clear" action.
-
-    TODO:
-        - convert HTTPException details to JSON, e.g. {"status": "error", "message": "Detailed error message here"}
     """
     try:
         resp = None
         match action:
             case "approve":
-                if(not task_id or not task_id.isdigit()):
-                    raise HTTPException(status_code=400, detail="Invalid task_id. Must be a numeric string.")
+                if not task_id or not task_id.isdigit():
+                    raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid task_id. Must be a numeric string."})
                 resp = tasks.approve_batch(int(task_id))
+                if resp.get("error"):
+                    raise HTTPException(status_code=500, detail={"status": "error", "message": resp["error"]})
+                return {"status": "success", "message": f"Task batch {task_id} approved and added to Google Tasks."}
             case "deny":
-                if(not task_id or not task_id.isdigit()):
-                    raise HTTPException(status_code=400, detail="Invalid task_id. Must be a numeric string.")
-                resp =  tasks.reject_batch(int(task_id))
+                if not task_id or not task_id.isdigit():
+                    raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid task_id. Must be a numeric string."})
+                resp = tasks.reject_batch(int(task_id))
+                if resp.get("error"):
+                    raise HTTPException(status_code=500, detail={"status": "error", "message": resp["error"]})
+                return {"status": "success", "message": f"Task batch {task_id} denied and discarded."}
             case "clear":
                 logging.warning("Clearing all pending batches as per 'clear' action request. This will reject all pending batches.")
                 resp = tasks.clear_pending_batches()
                 if resp.get("error"):
-                    raise HTTPException(status_code=500, detail=resp["error"])
-                return HTTPException(status_code=200, detail={"status": "success","message": "All pending batches have been cleared (rejected)."})
+                    raise HTTPException(status_code=500, detail={"status": "error", "message": resp["error"]})
+                return {"status": "success", "message": "All pending batches have been cleared (rejected)."}
             case _:
-                raise HTTPException(status_code=400, detail="Invalid action. Must be 'approve' or 'deny'.")
-        if(resp.get("error")):
-            raise HTTPException(status_code=500, detail=resp["error"])
-        return HTTPException(status_code=200, detail={"status": "success", "message": f"Action '{action}' has been processed for task batch {task_id}."})
+                raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid action. Must be 'approve', 'deny', or 'clear'."})
+    except HTTPException:
+        raise
     except Exception as e:
-        logging.error(f"Error processing action for task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing action for task {task_id}: {e}")
+        logging.error(f"Error processing action '{action}' for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail={"status": "error", "message": f"Error processing action: {e}"})
     
 
 @app.get("/pending")
