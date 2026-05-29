@@ -137,5 +137,5 @@ async def lifespan(app: FastAPI):
         observer.join() 
         logging.info("✨ File watcher stopped. Goodbye!")
     else:
-        logging.info("!! File tracker is not set to track any file. File watcher thread will not start. Please set 'file_to_check' in the configuration to the file you want to track for changes before starting the server.")
+        logging.warning("!! File tracker is not set to track any file. File watcher thread will not start.")
         yield

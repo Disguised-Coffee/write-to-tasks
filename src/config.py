@@ -4,6 +4,8 @@ import os
 import json
 import logging
 
+import keyring
+
 import dotenv
 dotenv.load_dotenv()
 
@@ -27,8 +29,11 @@ def load_user_config():
             temp = json.load(f)
             # validate config keys
             for key in DEFAULT_CONFIG.keys():
+                # skip google api token...
+                if key == "google_api_token":
+                    continue
                 if key not in temp:
-                    logging.warning(f"Configuration key '{key}' not found in user.config.json. Using default value: {DEFAULT_CONFIG[key]}")
+                    logging.info(f"Configuration key '{key}' not found in user.config.json. Using default value: {DEFAULT_CONFIG[key]}")
                     temp[key] = DEFAULT_CONFIG[key]
             USER_CONFIG = temp
             logging.info("User configuration loaded successfully.")
@@ -49,6 +54,15 @@ def load_user_config():
     except Exception as e:
         logging.error(f"Error loading user configuration: {e}")
         USER_CONFIG = DEFAULT_CONFIG.copy()
+    
+     # because we want to use os encryption for the API key, we need a separate case
+    USER_CONFIG["google_api_token"] = keyring.get_password("write-to-tasks", "google_api_token")
+    if USER_CONFIG["google_api_token"] is None:
+        # try the .ENV variable as a fallback
+        logging.info("Google API token not found in keyring! Trying .ENV variable...")
+        USER_CONFIG["google_api_token"] = os.getenv("GOOGLE_API_KEY", None)
+        if USER_CONFIG["google_api_token"] is None:
+            logging.error("Google API token not found! Set it using the Web Interface or use a .ENV variable. Google API calls will not work until this is set.")
 
 def get(key, default=None):
     """Get a configuration variable by key, with an optional default value."""
@@ -57,9 +71,20 @@ def get(key, default=None):
 def set(key, value):
     """Set a configuration variable and save it to the JSON file."""
     USER_CONFIG[key] = value
-    try:
-        with open("user.config.json", "w") as f:
-            json.dump(USER_CONFIG, f, indent=4)
-            logging.info(f"Configuration '{key}' updated successfully.")
-    except Exception as e:
-        logging.error(f"Error saving user configuration: {e}")
+    # if it was the google api token, we want to save it in the keyring instead of the JSON file for security reasons
+    if key == "google_api_token":
+        try:
+            keyring.set_password("write-to-tasks", "google_api_token", value)
+            logging.info("Google API token updated successfully in keyring.")
+        except Exception as e:
+            logging.error(f"Error saving Google API token to keyring: {e}")
+    else:
+        try:
+            with open("user.config.json", "w") as f:
+                to_dump = USER_CONFIG.copy()
+                # we don't want to save the google API token in the JSON file, so we'll remove it before dumping
+                to_dump.pop("google_api_token", None)
+                json.dump(to_dump, f, indent=4)
+                logging.info(f"Configuration '{key}' updated successfully.")
+        except Exception as e:
+            logging.error(f"Error saving user configuration: {e}")

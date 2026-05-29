@@ -8,3 +8,4 @@ uvicorn
 desktop_notifier
 sqlmodel
 pydantic
+keyring
